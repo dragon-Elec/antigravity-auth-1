@@ -31,7 +31,7 @@ function createMockClient() {
 function createPluginInfo(overrides: Partial<ReturnType<typeof findPluginEntry>> = {}) {
   return {
     configPath: "/test/.config/opencode/opencode.json",
-    entry: "opencode-antigravity-auth@1.2.6",
+    entry: "@expiren/opencode-antigravity-auth@1.2.6",
     pinnedVersion: "1.2.6",
     isPinned: true,
     ...overrides,

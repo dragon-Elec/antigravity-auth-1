@@ -472,6 +472,49 @@ function sanitizeRequestPayloadForAntigravity(payload: Record<string, unknown>):
         };
       });
   }
+
+  if (Array.isArray(anyPayload.messages)) {
+    anyPayload.messages = anyPayload.messages.map((message: unknown) => {
+      if (!message || typeof message !== "object") {
+        return { role: "user", content: [{ type: "text", text: "." }] }
+      }
+
+      const messageRecord = message as Record<string, unknown>
+      const rawContent = Array.isArray(messageRecord.content) ? messageRecord.content : messageRecord.content
+
+      if (!Array.isArray(rawContent)) {
+        return messageRecord
+      }
+
+      const sanitizedContent = rawContent.map((block: unknown) => {
+        if (!block || typeof block !== "object") {
+          return { type: "text", text: "." }
+        }
+
+        const blockRecord = block as Record<string, unknown>
+        if (blockRecord.type === "text") {
+          const text = blockRecord.text
+          if (typeof text !== "string" || text.trim().length === 0) {
+            const sentinel: Record<string, unknown> = { type: "text", text: "." }
+            if (blockRecord.cache_control !== undefined) sentinel.cache_control = blockRecord.cache_control
+            return sentinel
+          }
+        }
+
+        return block
+      })
+
+      if (sanitizedContent.length === 0) {
+        return { ...messageRecord, content: [{ type: "text", text: "." }] }
+      }
+
+      return {
+        ...messageRecord,
+        content: sanitizedContent,
+      }
+    })
+  }
+
   const systemInstruction = anyPayload.systemInstruction;
   if (systemInstruction && typeof systemInstruction === "object" && !Array.isArray(systemInstruction)) {
     const sys = systemInstruction as Record<string, unknown>;
@@ -872,7 +915,6 @@ export function prepareAntigravityRequest(
   const isClaude = isClaudeModel(resolved.actualModel);
   const isClaudeThinking = isClaudeThinkingModel(resolved.actualModel);
   const keepThinkingEnabled = getKeepThinking();
-  const enableClaudePromptAutoCaching = options?.claudePromptAutoCaching ?? false;
 
   // Tier-based thinking configuration from model resolver (can be overridden by variant config)
   let tierThinkingBudget = resolved.thinkingBudget;
@@ -928,14 +970,10 @@ export function prepareAntigravityRequest(
             // Step 0: Sanitize cross-model metadata (strips Gemini signatures when sending to Claude)
             sanitizeCrossModelPayloadInPlace(req, { targetModel: effectiveModel });
 
-            // Step 1: Strip corrupted/unsigned thinking blocks FIRST
-            deepFilterThinkingBlocks(req, signatureSessionKey, getCachedSignature, true);
+          // Step 1: Strip corrupted/unsigned thinking blocks FIRST
+          deepFilterThinkingBlocks(req, signatureSessionKey, getCachedSignature, true);
 
-            if (enableClaudePromptAutoCaching && (req as any).cache_control === undefined) {
-              (req as any).cache_control = { type: "ephemeral" };
-            }
-
-            // Step 2: THEN inject signed thinking from cache (after stripping)
+          // Step 2: THEN inject signed thinking from cache (after stripping)
             if (isClaudeThinking && keepThinkingEnabled && Array.isArray((req as any).contents)) {
               (req as any).contents = ensureThinkingBeforeToolUseInContents((req as any).contents, signatureSessionKey);
             }
@@ -1382,10 +1420,6 @@ export function prepareAntigravityRequest(
 
           // Step 1: Strip corrupted/unsigned thinking blocks FIRST
           deepFilterThinkingBlocks(requestPayload, signatureSessionKey, getCachedSignature, true);
-
-          if (enableClaudePromptAutoCaching && requestPayload.cache_control === undefined) {
-            requestPayload.cache_control = { type: "ephemeral" };
-          }
 
           // Step 2: THEN inject signed thinking from cache (after stripping)
           if (isClaudeThinking && keepThinkingEnabled && Array.isArray(requestPayload.contents)) {

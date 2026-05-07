@@ -448,6 +448,90 @@ describe("request.ts", () => {
       const result = callTransformSseLine(line);
       expect(result).toContain("data:");
     });
+
+    it("does not leak placeholder text into duplicate Claude thinking output", () => {
+      const store = createMockSignatureStore();
+      const buffer = createMockThoughtBuffer();
+      const sentBuffer = createMockThoughtBuffer();
+      const displayedThinkingHashes = new Set<string>();
+
+      const line = `data: ${JSON.stringify({
+        response: {
+          content: [
+            { type: "thinking", thinking: "The user wants OK", text: "The user wants OK" },
+            { type: "text", text: "OK" },
+          ],
+        },
+      })}`;
+
+      const first = transformSseLine(
+        line,
+        store,
+        buffer,
+        sentBuffer,
+        defaultCallbacks,
+        { ...defaultOptions, displayedThinkingHashes },
+        { ...defaultDebugState },
+      );
+      expect(first).toContain('"text":"OK"');
+
+      const second = transformSseLine(
+        line,
+        store,
+        buffer,
+        sentBuffer,
+        defaultCallbacks,
+        { ...defaultOptions, displayedThinkingHashes },
+        { ...defaultDebugState },
+      );
+      expect(second).not.toContain('"text":"."');
+      expect(second).toContain('"text":"OK"');
+    });
+
+    it("omits empty duplicate Claude thinking chunks instead of creating blank text", () => {
+      const store = createMockSignatureStore();
+      const buffer = createMockThoughtBuffer();
+      const sentBuffer = createMockThoughtBuffer();
+
+      const firstLine = `data: ${JSON.stringify({
+        response: {
+          content: [
+            { type: "thinking", thinking: "Only hidden thinking so far", text: "Only hidden thinking so far" },
+          ],
+        },
+      })}`;
+
+      transformSseLine(
+        firstLine,
+        store,
+        buffer,
+        sentBuffer,
+        defaultCallbacks,
+        defaultOptions,
+        { ...defaultDebugState },
+      );
+
+      const duplicateLine = `data: ${JSON.stringify({
+        response: {
+          content: [
+            { type: "thinking", thinking: "Only hidden thinking so far", text: "Only hidden thinking so far" },
+          ],
+        },
+      })}`;
+
+      const duplicate = transformSseLine(
+        duplicateLine,
+        store,
+        buffer,
+        sentBuffer,
+        defaultCallbacks,
+        defaultOptions,
+        { ...defaultDebugState },
+      );
+
+      expect(duplicate).not.toContain('"type":"text","text":""');
+      expect(duplicate).toContain('"content":[]');
+    });
   });
 
   describe("transformStreamingPayload", () => {
@@ -746,7 +830,25 @@ it("removes x-api-key header", () => {
       expect(wrapped.request.cache_control).toBeUndefined();
     });
 
-    it("adds Claude auto-caching when enabled", () => {
+    it("normalizes whitespace-only Claude text blocks before sending", () => {
+      const unwrappedBody = {
+        messages: [
+          { role: "user", content: [{ type: "text", text: "   \n\t  " }] },
+        ],
+      }
+
+      const result = prepareAntigravityRequest(
+        "https://generativelanguage.googleapis.com/v1beta/models/claude-opus-4-6-thinking:generateContent",
+        { method: "POST", body: JSON.stringify(unwrappedBody) },
+        mockAccessToken,
+        mockProjectId,
+      )
+
+      const wrapped = JSON.parse(result.init.body as string)
+      expect(wrapped.request.messages[0].content[0]).toEqual({ type: "text", text: "." })
+    })
+
+    it("does not inject Claude auto-caching markers on the Antigravity proxy even when enabled", () => {
       const unwrappedBody = {
         messages: [{ role: "user", content: [{ type: "text", text: "Hello" }] }]
       };
@@ -762,7 +864,8 @@ it("removes x-api-key header", () => {
       );
 
       const wrapped = JSON.parse(result.init.body as string);
-      expect(wrapped.request.cache_control).toEqual({ type: "ephemeral" });
+      expect(wrapped.request.cache_control).toBeUndefined();
+      expect(wrapped.request.messages[0].content[0].cache_control).toBeUndefined();
     });
 
     it("strips Claude thinking blocks when keep_thinking is false (unwrapped)", () => {

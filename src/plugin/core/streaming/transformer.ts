@@ -73,7 +73,7 @@ export function deduplicateThinkingText(
       const content = cand.content as Record<string, unknown>;
       if (!Array.isArray(content.parts)) return candidate;
 
-      const newParts = content.parts.map((part: unknown) => {
+      const newParts = content.parts.flatMap((part: unknown) => {
         const p = part as Record<string, unknown>;
         
         // Handle image data - save to disk and return file path
@@ -95,9 +95,7 @@ export function deduplicateThinkingText(
             const hash = hashString(fullText);
             if (displayedThinkingHashes.has(hash)) {
               sentBuffer.set(index, fullText);
-              // Sentinel instead of null — preserves array length on response path
-              // Use dot (not empty string) — empty text is dropped by proxy on next turn
-              return { text: "." };
+              return [];
             }
             displayedThinkingHashes.add(hash);
           }
@@ -112,14 +110,12 @@ export function deduplicateThinkingText(
               // Clean object — NO spread to prevent thinking: <object> leaking
               return { thought: true, text: delta };
             }
-            // Sentinel instead of null — preserves array length on response path
-            // Use dot (not empty string) — empty text is dropped by proxy on next turn
-            return { text: "." };
+            return [];
           }
 
           sentBuffer.set(index, fullText);
           return part;
-        }        return part;
+        }        return [part];
       });
 
       return {
@@ -132,7 +128,7 @@ export function deduplicateThinkingText(
 
   if (Array.isArray(resp.content)) {
     let thinkingIndex = 0;
-    const newContent = resp.content.map((block: unknown) => {
+    const newContent = resp.content.flatMap((block: unknown) => {
       const b = block as Record<string, unknown> | null;
       if (b?.type === 'thinking') {
         const fullText = typeof b.thinking === "string" ? b.thinking : typeof b.text === "string" ? b.text : "";
@@ -142,9 +138,7 @@ export function deduplicateThinkingText(
           if (displayedThinkingHashes.has(hash)) {
             sentBuffer.set(thinkingIndex, fullText);
             thinkingIndex++;
-            // Sentinel instead of null — preserves array length on response path
-            // Use dot (not empty string) — empty text is dropped by proxy on next turn
-            return { type: "text", text: "." };
+            return [];
           }
           displayedThinkingHashes.add(hash);
         }
@@ -160,15 +154,13 @@ export function deduplicateThinkingText(
             // Clean object — NO spread to prevent thinking: <object> leaking
             return { type: b.type, thinking: delta, text: delta };
           }
-          // Sentinel instead of null — preserves array length on response path
-          // Use dot (not empty string) — empty text is dropped by proxy on next turn
-          return { type: "text", text: "." };
+          return [];
         }
 
         sentBuffer.set(thinkingIndex, fullText);
         thinkingIndex++;
         return block;
-      }      return block;
+      }      return [block];
     });
 
     return { ...resp, content: newContent };  }
