@@ -211,6 +211,29 @@ describe("updateOpencodeConfig", () => {
     }
   });
 
+  test("writes model definitions with fields required by OpenCode provider schema", async () => {
+    const result = await updateOpencodeConfig({ configPath });
+
+    expect(result.success).toBe(true);
+
+    const writtenConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    const models = writtenConfig.provider.google.models;
+
+    for (const [modelID, model] of Object.entries(OPENCODE_MODEL_DEFINITIONS)) {
+      expect(models[modelID]).toMatchObject({
+        id: modelID,
+        name: model.name,
+        release_date: model.release_date,
+        attachment: model.attachment,
+        reasoning: model.reasoning,
+        temperature: model.temperature,
+        tool_call: model.tool_call,
+        limit: model.limit,
+        modalities: model.modalities,
+      });
+    }
+  });
+
   test("parses existing jsonc config files with comments and trailing commas", async () => {
     const jsoncPath = path.join(tempDir, "opencode.jsonc");
     const existingJsoncConfig = `{
