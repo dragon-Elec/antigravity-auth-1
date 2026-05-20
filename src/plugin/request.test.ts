@@ -1135,7 +1135,7 @@ it("removes x-api-key header", () => {
           undefined,
           "antigravity"
         );
-        expect(result.effectiveModel).toBe("gemini-3-flash");
+        expect(result.effectiveModel).toBe("gemini-3-flash-medium");
       });
 
       it("transforms gemini-3-pro-preview to gemini-3-pro-low for antigravity headerStyle", () => {

@@ -183,22 +183,23 @@ export function resolveModelWithTier(requestedModel: string, options: ModelResol
   const isGemini3 = modelWithoutQuota.toLowerCase().startsWith("gemini-3");
   const skipAlias = isAntigravity && isGemini3;
 
-  // For Antigravity Gemini 3 Pro models without explicit tier, append default tier
-  // Antigravity API: gemini-3-pro requires tier suffix (gemini-3-pro-low/high)
-  //                  gemini-3-flash uses bare name + thinkingLevel param
-  // Pro defaults to -low unless an explicit tier is provided
+  // For Antigravity Gemini 3 models without explicit tier, append default tier
+  // Antigravity API requires tier suffixes for both Pro and Flash:
+  //   gemini-3.1-pro-{low,high}
+  //   gemini-3.5-flash-{medium,high}
+  // Pro defaults to -low, Flash defaults to -medium
   const isGemini3Pro = isGemini3ProModel(modelWithoutQuota);
   const isGemini3Flash = isGemini3FlashModel(modelWithoutQuota);
   
   let antigravityModel = modelWithoutQuota;
   if (skipAlias) {
-    if (isGemini3Pro && !tier && !isImageModel) {
-      antigravityModel = `${modelWithoutQuota}-low`;
-    } else if (isGemini3Flash && tier) {
-      antigravityModel = baseName;
+    if ((isGemini3Pro || isGemini3Flash) && !tier && !isImageModel) {
+      const defaultTier = isGemini3Pro ? "low" : "medium";
+      antigravityModel = `${modelWithoutQuota}-${defaultTier}`;
     }
+    // When tier is present, modelWithoutQuota already contains the tier suffix
+    // (e.g., "gemini-3.5-flash-high") — no modification needed
   }
-
   const actualModel = skipAlias
     ? antigravityModel
     : MODEL_ALIASES[modelWithoutQuota] || MODEL_ALIASES[baseName] || baseName;
@@ -332,14 +333,15 @@ export function resolveModelForHeaderStyle(
       .replace(/^antigravity-/i, "");
     
     const isGemini3Pro = isGemini3ProModel(transformedModel);
+    const isGemini3Flash = isGemini3FlashModel(transformedModel);
     const hasTierSuffix = /-(low|medium|high)$/i.test(transformedModel);
     const isImageModel = IMAGE_GENERATION_MODELS.test(transformedModel);
     
     // Don't add tier suffix to image models - they don't support thinking
-    if (isGemini3Pro && !hasTierSuffix && !isImageModel) {
-      transformedModel = `${transformedModel}-low`;
-    }
-    
+    if ((isGemini3Pro || isGemini3Flash) && !hasTierSuffix && !isImageModel) {
+      const defaultTier = isGemini3Pro ? "low" : "medium";
+      transformedModel = `${transformedModel}-${defaultTier}`;
+    }    
     const prefixedModel = `antigravity-${transformedModel}`;
     return resolveModelWithTier(prefixedModel);
   }
@@ -392,15 +394,14 @@ export function resolveModelWithVariant(
 
   if (isGemini3) {
     const level = budgetToGemini3Level(budget);
-    const isAntigravityGemini3Pro = base.quotaPreference === "antigravity" &&
-      isGemini3ProModel(base.actualModel);
+    const isAntigravityGemini3WithTier = base.quotaPreference === "antigravity" &&
+      (isGemini3ProModel(base.actualModel) || isGemini3FlashModel(base.actualModel));
 
     let actualModel = base.actualModel;
-    if (isAntigravityGemini3Pro) {
+    if (isAntigravityGemini3WithTier) {
       const baseModel = base.actualModel.replace(/-(low|medium|high)$/, "");
       actualModel = `${baseModel}-${level}`;
     }
-
     return {
       ...base,
       actualModel,

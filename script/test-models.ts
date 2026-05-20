@@ -10,21 +10,26 @@ const MODELS: ModelTest[] = [
   // Gemini CLI (direct Google API)
   { model: "google/gemini-3-flash-preview", category: "gemini-cli" },
   { model: "google/gemini-3-pro-preview", category: "gemini-cli" },
-  { model: "google/gemini-2.5-pro", category: "gemini-cli" },
-  { model: "google/gemini-2.5-flash", category: "gemini-cli" },
+  { model: "google/gemini-3.1-pro-preview", category: "gemini-cli" },
+  { model: "google/gemini-3.5-flash-preview", category: "gemini-cli" },
 
   // Antigravity Gemini
-  { model: "google/antigravity-gemini-3-pro-low", category: "antigravity-gemini" },
-  { model: "google/antigravity-gemini-3-pro-high", category: "antigravity-gemini" },
-  { model: "google/antigravity-gemini-3-flash", category: "antigravity-gemini" },
+  { model: "google/antigravity-gemini-3.1-pro-low", category: "antigravity-gemini" },
+  { model: "google/antigravity-gemini-3.1-pro-high", category: "antigravity-gemini" },
+  { model: "google/antigravity-gemini-3.5-flash-high", category: "antigravity-gemini" },
+  { model: "google/antigravity-gemini-3.5-flash-medium", category: "antigravity-gemini" },
 
   // Antigravity Claude
-  { model: "google/antigravity-claude-sonnet-4-6", category: "antigravity-claude" },
+  { model: "google/antigravity-claude-sonnet-4-6-thinking", category: "antigravity-claude" },
   { model: "google/antigravity-claude-opus-4-6-thinking-low", category: "antigravity-claude" },
-  { model: "google/antigravity-claude-opus-4-6-thinking-medium", category: "antigravity-claude" },
-  { model: "google/antigravity-claude-opus-4-6-thinking-high", category: "antigravity-claude" },
-];
+  { model: "google/antigravity-claude-opus-4-6-thinking-max", category: "antigravity-claude" },
 
+  // Antigravity GPT
+  { model: "google/antigravity-gpt-oss-120b-medium", category: "antigravity-gemini" },
+
+  // Antigravity Image
+  { model: "google/antigravity-gemini-3.1-flash-image", category: "antigravity-gemini" },
+];
 const TEST_PROMPT = "Reply with exactly one word: WORKING";
 const DEFAULT_TIMEOUT_MS = 120_000;
 
