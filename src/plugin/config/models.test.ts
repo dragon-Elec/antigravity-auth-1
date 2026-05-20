@@ -28,7 +28,7 @@ describe("OPENCODE_MODEL_DEFINITIONS", () => {
       "gemini-3.1-flash-image-preview",
       "gemini-3.1-pro-preview",
       "gemini-3.1-pro-preview-customtools",
-      "gemini-3.5-flash-preview",
+      "gemini-3.5-flash",
     ]);  });
 
   it("defines Gemini variants for Antigravity models", () => {

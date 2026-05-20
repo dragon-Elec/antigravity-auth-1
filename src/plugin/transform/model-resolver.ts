@@ -352,10 +352,12 @@ export function resolveModelForHeaderStyle(
       .replace(/-(low|medium|high)$/i, "");
 
     const hasPreviewSuffix = /-preview($|-)/i.test(transformedModel);
-    if (!hasPreviewSuffix) {
+    // Gemini 3.5 Flash shipped as stable — no -preview suffix needed
+    // Other Gemini 3.x models still use -preview (e.g., gemini-3-pro-preview, gemini-3.1-pro-preview)
+    const isGemini35Flash = /^gemini-3\.5-flash/i.test(transformedModel);
+    if (!hasPreviewSuffix && !isGemini35Flash) {
       transformedModel = `${transformedModel}-preview`;
-    }
-    
+    }    
     return {
       ...resolveModelWithTier(transformedModel),
       quotaPreference: "gemini-cli",
