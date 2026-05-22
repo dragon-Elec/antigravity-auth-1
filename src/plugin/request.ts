@@ -913,8 +913,7 @@ export function prepareAntigravityRequest(
   const transformedUrl = `${baseEndpoint}/v1internal:${rawAction}${streaming ? "?alt=sse" : ""}`;
 
   const isClaude = isClaudeModel(resolved.actualModel);
-  const isClaudeThinking = isClaudeThinkingModel(resolved.actualModel);
-  const keepThinkingEnabled = getKeepThinking();
+  const isClaudeThinking = isClaudeThinkingModel(resolved.actualModel);  const keepThinkingEnabled = getKeepThinking();
 
   // Tier-based thinking configuration from model resolver (can be overridden by variant config)
   let tierThinkingBudget = resolved.thinkingBudget;
