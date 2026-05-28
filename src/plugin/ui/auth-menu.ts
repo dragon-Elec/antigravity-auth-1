@@ -164,7 +164,7 @@ function buildModelBreakdown(accounts: AccountInfo[]): string[] {
   return results
 }
 
-function buildAccountSummary(accounts: AccountInfo[]): string {
+function buildAccountSummary(accounts: AccountInfo[]): { countsLine: string; modelLine: string } {
   const counts: Record<string, number> = {}
   for (const acc of accounts) {
     const label = getHealthLabel(acc)
@@ -177,15 +177,20 @@ function buildAccountSummary(accounts: AccountInfo[]): string {
 
   // Per-model exhaustion breakdown
   const modelBreakdown = buildModelBreakdown(accounts)
-  const summary = parts.length > 0 ? parts.join(', ') : ''
-  const modelPart = modelBreakdown.length > 0 ? ` | ${modelBreakdown.join(', ')}` : ''
-  return summary ? `Accounts (${summary}${modelPart})` : 'Accounts'
+  const countsLine = parts.length > 0 ? `Accounts (${parts.join(', ')})` : 'Accounts'
+  const modelLine = modelBreakdown.length > 0 ? modelBreakdown.join(', ') : ''
+  return { countsLine, modelLine }
 }
 
 function buildAccountHint(account: AccountInfo): string {
-  // For [limited] accounts, the quota summary may contain "resets in X" which
-  // is redundant since the badge already distinguishes them from [active]
   if (account.quotaSummary) {
+    // For [limited] accounts, strip per-account "resets in Xh Ym" since the
+    // summary header already shows aggregate reset times — avoids 22 identical
+    // "Claude exhausted resets in 120h 33m" lines
+    const overall = classifyOverallQuotaHealth(account.cachedQuota)
+    if (overall.health === 'partial') {
+      return account.quotaSummary.replace(/\s*resets in \S+/g, '')
+    }
     return account.quotaSummary
   }
   if (account.lastUsed) {
@@ -211,7 +216,8 @@ function buildAccountMenuItems(accounts: AccountInfo[]): MenuItem<AuthMenuAction
     prevTier = tier
 
     const displayNum = i + 1
-    const statusBadge = getStatusBadge(account.status, account)
+    // Current account shows only [current] — no status badge to avoid double-badge noise
+    const statusBadge = account.isCurrentAccount ? '' : getStatusBadge(account.status, account)
     const currentBadge = account.isCurrentAccount ? ` ${ANSI.cyan}[current]${ANSI.reset}` : ''
     const disabledBadge = account.enabled === false ? ` ${ANSI.red}[disabled]${ANSI.reset}` : ''
     const baseLabel = account.email || `Account ${displayNum}`
@@ -241,7 +247,16 @@ export async function showAuthMenu(accounts: AccountInfo[]): Promise<AuthMenuAct
     { label: 'Configure models in opencode.json', value: { type: 'configure-models' }, color: 'cyan' },
     { label: '', value: { type: 'cancel' }, separator: true },
 
-    { label: buildAccountSummary(accounts), value: { type: 'cancel' }, kind: 'heading' },
+    ...((): MenuItem<AuthMenuAction>[] => {
+      const { countsLine, modelLine } = buildAccountSummary(accounts)
+      const lines: MenuItem<AuthMenuAction>[] = [
+        { label: countsLine, value: { type: 'cancel' }, kind: 'heading' },
+      ]
+      if (modelLine) {
+        lines.push({ label: modelLine, value: { type: 'cancel' }, kind: 'heading' })
+      }
+      return lines
+    })(),
 
     ...buildAccountMenuItems(accounts),
 

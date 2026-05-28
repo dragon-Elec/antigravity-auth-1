@@ -14,6 +14,8 @@ opencode-antigravity-auth/
 │   │   └── auto-update-checker/  # Background npm update check + auto-pin
 │   └── plugin/                   # Core plugin subsystems
 │       ├── accounts.ts           # AccountManager: selection, rotation, cooldowns
+│       ├── auth-doctor.ts        # Self-healing diagnostics for auth storage drift
+│       ├── auth-drift.ts         # Detection of drift between active auth and storage
 │       ├── auth.ts               # Token validation, refresh-parts parsing
 │       ├── cache.ts              # Thin re-export of cache/ module
 │       ├── cli.ts                # Interactive terminal prompts (login, project ID)
@@ -23,6 +25,7 @@ opencode-antigravity-auth/
 │       ├── image-saver.ts        # Save Gemini image-generation output to disk
 │       ├── logger.ts             # Structured logger with TUI + file sinks
 │       ├── logging-utils.ts      # ANSI helpers, console write utilities
+│       ├── model-registry.ts     # Centralized model specifications and quota groups
 │       ├── project.ts            # Managed project context resolution
 │       ├── quota.ts              # Quota API queries; QuotaGroup types
 │       ├── recovery.ts           # Thin re-export / error-type detection helpers
@@ -67,8 +70,10 @@ opencode-antigravity-auth/
 │       │   └── cross-model-sanitizer.ts # Strip incompatible fields when switching models
 │       └── ui/                   # Terminal UI primitives
 │           ├── ansi.ts           # ANSI colour helpers
-│           ├── auth-menu.ts      # Multi-account auth menu
+│           ├── auth-menu.ts      # Multi-account auth menu with tier separators and breakdowns
 │           ├── confirm.ts        # Y/n prompt
+│           ├── model-status.ts   # Per-model status aggregation across accounts
+│           ├── quota-status.ts   # Quota status labels and ANSI badge formatting
 │           └── select.ts         # Arrow-key selection list
 ├── docs/                         # Additional documentation
 │   ├── ARCHITECTURE.md           # Detailed architecture (this repo also has root ARCHITECTURE.md)
@@ -108,7 +113,7 @@ opencode-antigravity-auth/
 
 **`src/plugin/`:**
 - Purpose: All core plugin subsystems — auth, request transform, account management, recovery, config, logging
-- Contains: ~30 TypeScript modules + 7 subdirectories
+- Contains: ~35 TypeScript modules + 7 subdirectories
 - Key files: `src/plugin/accounts.ts`, `src/plugin/request.ts`, `src/plugin/storage.ts`, `src/plugin/types.ts`
 
 **`src/plugin/transform/`:**
@@ -142,9 +147,9 @@ opencode-antigravity-auth/
 - Key files: `src/plugin/stores/signature-store.ts`
 
 **`src/plugin/ui/`:**
-- Purpose: Terminal UI primitives for the interactive OAuth login flow
-- Contains: ANSI helpers, multi-account auth menu, confirm and select prompts
-- Key files: `src/plugin/ui/auth-menu.ts`
+- Purpose: Terminal UI primitives for the interactive OAuth login flow and status breakdowns
+- Contains: ANSI helpers, multi-account auth menu, confirm and select prompts, per-model and quota status aggregates
+- Key files: `src/plugin/ui/auth-menu.ts`, `src/plugin/ui/model-status.ts`, `src/plugin/ui/quota-status.ts`
 
 **`docs/`:**
 - Purpose: Supplementary documentation beyond the root README
@@ -184,7 +189,7 @@ opencode-antigravity-auth/
 
 **New request transform feature:** `src/plugin/request-helpers.ts` — add helper functions, import in `src/plugin/request.ts`
 
-**New model support:** `src/plugin/transform/model-resolver.ts` — add alias to `MODEL_ALIASES`; add per-model logic in `src/plugin/transform/claude.ts` or `src/plugin/transform/gemini.ts`
+**New model support:** `src/plugin/model-registry.ts` — register model specifications in `PUBLIC_MODEL_DEFINITIONS` and alias mapping in `MODEL_ALIASES`; add per-model logic in `src/plugin/transform/claude.ts` or `src/plugin/transform/gemini.ts`
 
 **New config option:** `src/plugin/config/schema.ts` — add Zod field with default and JSDoc; update `DEFAULT_CONFIG`; add getter in `src/plugin/config/index.ts` if needed
 

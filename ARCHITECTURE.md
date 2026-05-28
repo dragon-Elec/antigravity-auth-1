@@ -18,7 +18,7 @@
 **Entry Point / Orchestrator:**
 - Purpose: Intercepts fetch calls, manages auth lifecycle, routes requests, handles rate-limit retry loops
 - Location: `src/plugin.ts`
-- Contains: `createAntigravityPlugin` factory, rate-limit state machines, toast debounce, OAuth login flows, verification probe, account persistence helpers
+- Contains: `createAntigravityPlugin` factory, rate-limit state machines, toast debounce, OAuth login flows, verification probe, account persistence helpers, per-message request counter, capacity retries limited to 1 per endpoint before fingerprint regeneration
 - Depends on: Every other layer
 - Used by: OpenCode host via `@opencode-ai/plugin` contract
 
@@ -37,16 +37,16 @@
 - Used by: `src/plugin.ts`
 
 **Model Resolution & Per-Model Transforms:**
-- Purpose: Map request model names to Antigravity model IDs, choose header style (antigravity vs gemini-cli), apply model-specific config
-- Location: `src/plugin/transform/model-resolver.ts`, `src/plugin/transform/claude.ts`, `src/plugin/transform/gemini.ts`, `src/plugin/transform/cross-model-sanitizer.ts`
-- Contains: `resolveModelWithTier`, `resolveModelWithVariant`, `resolveModelForHeaderStyle`, `applyClaudeTransforms`, `applyGeminiTransforms`, `sanitizeCrossModelPayload`
+- Purpose: Map request model names to Antigravity model IDs, choose header style (antigravity vs gemini-cli), apply model-specific config, resolve thinking tier budgets
+- Location: `src/plugin/transform/model-resolver.ts`, `src/plugin/transform/claude.ts`, `src/plugin/transform/gemini.ts`, `src/plugin/transform/cross-model-sanitizer.ts`, `src/plugin/model-registry.ts`
+- Contains: `resolveModelWithTier`, `resolveModelWithVariant`, `resolveModelForHeaderStyle`, `applyClaudeTransforms`, `applyGeminiTransforms`, `sanitizeCrossModelPayload`, `supportsThinkingTiers`, `extractThinkingTierFromModel`
 - Depends on: `src/plugin/transform/types.ts`
 - Used by: `src/plugin/request.ts`
 
 **Multi-Account Management:**
-- Purpose: Track per-account OAuth state, rate-limit cooldowns, quota cache, and fingerprints; select the best account for each request
-- Location: `src/plugin/accounts.ts`, `src/plugin/storage.ts`, `src/plugin/rotation.ts`, `src/plugin/fingerprint.ts`
-- Contains: `AccountManager`, `HealthScoreTracker`, `TokenBucketTracker`, `selectHybridAccount`, `generateFingerprint`, `buildFingerprintHeaders`
+- Purpose: Track per-account OAuth state, rate-limit cooldowns, quota cache, and fingerprints; select the best account for each request; detect and repair auth storage drift
+- Location: `src/plugin/accounts.ts`, `src/plugin/storage.ts`, `src/plugin/rotation.ts`, `src/plugin/fingerprint.ts`, `src/plugin/auth-doctor.ts`, `src/plugin/auth-drift.ts`
+- Contains: `AccountManager`, `HealthScoreTracker`, `TokenBucketTracker`, `selectHybridAccount`, `generateFingerprint`, `buildFingerprintHeaders`, `FingerprintVersion` history (max 5), account storage version 4 support with migration, secure POSIX permissions, `detectAuthStorageDrift`, `createAuthDoctorReport`, self-healing repairs
 - Depends on: `src/plugin/auth.ts`, `src/plugin/quota.ts`, `proper-lockfile`, `xdg-basedir`
 - Used by: `src/plugin.ts`
 
@@ -58,10 +58,10 @@
 - Used by: `src/plugin.ts`
 
 **Quota:**
-- Purpose: Query Antigravity API for per-account quota usage; populate quota cache used by AccountManager for soft-quota gating
+- Purpose: Query Antigravity API for per-account quota usage; populate quota cache used by AccountManager for soft-quota gating; fetch Antigravity and Gemini CLI quotas in parallel
 - Location: `src/plugin/quota.ts`
-- Contains: `checkAccountsQuota`, `QuotaGroup`, `QuotaGroupSummary`
-- Depends on: OAuth token utilities
+- Contains: `checkAccountsQuota`, `QuotaGroup`, `QuotaGroupSummary`, `fetchGeminiCliQuota`, parallel fetches, wider model matching (gemini-3.5-*, gemini-3.1-*, gemini-2.5-*), gpt-oss quota group tracking
+- Depends on: OAuth token utilities, `src/plugin/model-registry.ts`
 - Used by: `src/plugin.ts` (async background refresh), `src/plugin/accounts.ts`
 
 **Session Recovery:**
@@ -88,7 +88,7 @@
 **Configuration:**
 - Purpose: Load, merge, and validate plugin configuration from files and environment variables
 - Location: `src/plugin/config/` (`schema.ts`, `loader.ts`, `models.ts`, `updater.ts`, `index.ts`)
-- Contains: `AntigravityConfigSchema`, `loadConfig`, `initRuntimeConfig`, `AntigravityConfig`
+- Contains: `AntigravityConfigSchema`, `loadConfig`, `initRuntimeConfig`, `AntigravityConfig`, settings for `thinking_warmup`, `max_account_switches`, `quota_style_fallback`
 - Depends on: `zod`
 - Used by: `src/plugin.ts`, most `src/plugin/` modules via `getKeepThinking()` etc.
 
@@ -121,9 +121,9 @@
 - Used by: `src/plugin.ts`, `src/plugin/request.ts`
 
 **CLI / UI:**
-- Purpose: Interactive terminal prompts for login, account selection, and project ID entry
-- Location: `src/plugin/cli.ts`, `src/plugin/ui/` (`auth-menu.ts`, `ansi.ts`, `confirm.ts`, `select.ts`)
-- Contains: `promptLoginMode`, `promptAddAnotherAccount`, `promptProjectId`, `AuthMenu`
+- Purpose: Interactive terminal prompts for login, account selection, project ID entry, and per-model availability display
+- Location: `src/plugin/cli.ts`, `src/plugin/ui/` (`auth-menu.ts`, `ansi.ts`, `confirm.ts`, `select.ts`, `model-status.ts`, `quota-status.ts`)
+- Contains: `promptLoginMode`, `promptAddAnotherAccount`, `promptProjectId`, `showAuthMenu`, `getModelStatusFromAccounts`, `formatQuotaStatusBadge`
 - Depends on: Node.js readline
 - Used by: `src/plugin.ts` auth flow
 
@@ -136,7 +136,7 @@
 2. `isGenerativeLanguageRequest()` confirms the URL matches — `src/plugin/request.ts`
 3. `AccountManager.selectAccount()` picks the best OAuth account — `src/plugin/accounts.ts`
 4. `resolveModelWithTier()` maps model name → Antigravity model ID + header style — `src/plugin/transform/model-resolver.ts`
-5. `prepareAntigravityRequest()` cleans schema, strips thinking blocks, injects tool-hardening, composes headers — `src/plugin/request.ts`, `src/plugin/request-helpers.ts`
+5. `prepareAntigravityRequest()` cleans schema, strips thinking blocks for Claude, injects tool-hardening, composes headers — `src/plugin/request.ts`, `src/plugin/request-helpers.ts`
 6. `buildFingerprintHeaders()` attaches per-account device fingerprint — `src/plugin/fingerprint.ts`
 7. `fetch()` is called against Antigravity endpoint with Bearer token — `src/plugin.ts`
 8. `transformAntigravityResponse()` converts SSE stream back to Gemini API format — `src/plugin/request.ts`
@@ -187,6 +187,16 @@
 - Location: `src/plugin/storage.ts` (type), `src/plugin/transform/model-resolver.ts`
 - Pattern: Discriminated string union used by `AccountManager`, `quota.ts`, and rate-limit key construction
 
+**`ModelQuotaGroup`:**
+- Purpose: Partition available models into four quota tracking groups (`claude`, `gemini-pro`, `gemini-flash`, and `gpt-oss`)
+- Location: `src/plugin/model-registry.ts` (type), `src/plugin/quota.ts` (tracking)
+- Pattern: String literal union mapping physical model IDs to logical quota partitions, allowing parallel quota fetching and aggregated health reporting
+
+**`AuthDoctor`:**
+- Purpose: Diagnose and self-heal storage inconsistencies and active credentials drift
+- Location: `src/plugin/auth-doctor.ts`, `src/plugin/auth-drift.ts`
+- Pattern: Diagnostic functional reporting (`createAuthDoctorReport`) that identifies severity findings and suggests/applies target repairs (e.g., restoring active accounts, clamping indices)
+
 **`SignatureStore` / `SignatureCache`:**
 - Purpose: Cache Claude thinking-block signatures in memory and optionally on disk, keyed by session
 - Location: `src/plugin/core/streaming/types.ts`, `src/plugin/cache/signature-cache.ts`, `src/plugin/stores/signature-store.ts`
@@ -215,16 +225,16 @@
 
 ## Error Handling
 
-**Strategy:** Defensive try/catch with graceful degradation — fallback values rather than crashes. Rate-limit and quota errors trigger account rotation, not failure. Session errors trigger recovery injection. Empty responses retry up to `empty_response_max_attempts` times before returning a synthetic error response. Token refresh failures throw typed `AntigravityTokenRefreshError`. Unknown errors are caught, logged, and surfaced as domain errors to callers.
+**Strategy:** Defensive try/catch with graceful degradation — fallback values rather than crashes. Rate-limit and quota errors trigger account rotation, not failure. Session errors trigger recovery injection. Empty responses retry up to `empty_response_max_attempts` times before returning a synthetic error response. Token refresh failures throw typed `AntigravityTokenRefreshError`. Unknown errors are caught, logged, and surfaced as domain errors to callers. Capacity rate-limits (503/429) trigger a device fingerprint regeneration after 1 attempt per endpoint fallback.
 
 ---
 
 ## Cross-Cutting Concerns
 
-**Logging:** `createLogger("module-name")` from `src/plugin/logger.ts` for structured per-module logging with dual sinks: TUI log panel (`debug_tui`) and debug file (`debug`). `console.log` only in CLI / interactive auth flows.
+**Logging:** `createLogger("module-name")` from `src/plugin/logger.ts` for structured per-module logging with dual sinks: TUI log panel (`debug_tui`) and debug file (`debug`). Per-message API request counters track request volumes for diagnostic visibility. `console.log` only in CLI / interactive auth flows.
 
-**Caching:** In-memory signature store for thinking blocks; optional disk persistence via `SignatureCache` when `keep_thinking` is enabled. Auth tokens cached per-account in `AccountManager`. Quota data cached per-account with configurable TTL.
+**Caching:** In-memory signature store for thinking blocks; optional disk persistence via `SignatureCache` when `keep_thinking` is enabled. Auth tokens cached per-account in `AccountManager`. Quota data cached per-account with configurable TTL and background parallel refreshes.
 
-**Storage:** Accounts persisted to `antigravity-accounts.json` (XDG data dir) via `src/plugin/storage.ts` with `proper-lockfile` for concurrent-write safety. Config loaded from `.opencode/antigravity.json` (project) and `~/.config/opencode/antigravity.json` (user).
+**Storage:** Accounts persisted to `antigravity-accounts.json` (XDG data dir) via `src/plugin/storage.ts` with `proper-lockfile` for concurrent-write safety. Current format is version 4, featuring automatic migration from older versions (v1, v2, v3), secure POSIX permissions (0600), and legacy Windows path migration. Config loaded from `.opencode/antigravity.json` (project) and `~/.config/opencode/antigravity.json` (user).
 
-**Configuration:** Two-level config file hierarchy (project overrides user) plus environment variable overrides. All config is read once at startup via `loadConfig()` and made available globally via `initRuntimeConfig()` and module-level getters.
+**Configuration:** Two-level config file hierarchy (project overrides user) plus environment variable overrides. All config is read once at startup via `loadConfig()` and made available globally via `initRuntimeConfig()` and module-level getters. Config supports quota fallback disabling via `quota_style_fallback: false`, switches limit via `max_account_switches: 2`, and thinking warmup option `thinking_warmup: false`.
