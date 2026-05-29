@@ -2691,11 +2691,16 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     };
 
                     // Helper to format reset time with days support
-                    const formatReset = (resetTime?: string): string => {
+                    const formatReset = (resetTime?: string, remainingFraction?: number): string => {
                       if (!resetTime) return '';
                       const ms = Date.parse(resetTime) - Date.now();
-                      if (ms <= 0) return ' (resetting...)';
-                      
+                      if (ms <= 0) {
+                        // If quota is 0% and reset time is in the past, the model is
+                        // likely paywalled / permanently unavailable on this quota pool
+                        return remainingFraction !== undefined && remainingFraction <= 0
+                          ? ' (unavailable)'
+                          : ' (resetting...)';
+                      }                      
                       const hours = ms / (1000 * 60 * 60);
                       if (hours >= 24) {
                         const days = Math.floor(hours / 24);
@@ -2720,7 +2725,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                         const isLast = idx === models.length - 1;
                         const connector = isLast ? "└─" : "├─";
                         const bar = createProgressBar(model.remainingFraction);
-                        const reset = formatReset(model.resetTime);
+                        const reset = formatReset(model.resetTime, model.remainingFraction);
                         const status = classifyGroupStatus({ remainingFraction: model.remainingFraction, resetTime: model.resetTime, modelCount: 1 });
                         const badge = formatQuotaStatusBadge(status);
                         const modelName = model.modelId.padEnd(29);
@@ -2746,7 +2751,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                         const isLast = idx === groupEntries.length - 1;
                         const connector = isLast ? "└─" : "├─";
                         const bar = createProgressBar(g.data!.remainingFraction);
-                        const reset = formatReset(g.data!.resetTime);
+                        const reset = formatReset(g.data!.resetTime, g.data!.remainingFraction);
                         const status = classifyGroupStatus(g.data!);
                         const badge = formatQuotaStatusBadge(status);
                         const modelName = g.name.padEnd(29);
