@@ -1927,9 +1927,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
               }
             };
 
+            // Track total API requests made for this single user message
+            let apiRequestCount = 0;
+
             // Try endpoint fallbacks with single header style based on model suffix
-            let shouldSwitchAccount = false;
-            
+            let shouldSwitchAccount = false;            
             // Determine header style from model suffix:
             // - Models with antigravity- prefix -> use Antigravity quota
             // - Gemini models without explicit prefix -> follow cli_first
@@ -2005,10 +2007,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
             let capacityRetryCount = 0;
             let lastEndpointIndex = -1;
             
-            // Track total API requests made for this single user message
-            let apiRequestCount = 0;            
-            for (let i = 0; i < ANTIGRAVITY_ENDPOINT_FALLBACKS.length; i++) {
-              // Reset capacity retry counter when switching to a new endpoint
+            for (let i = 0; i < ANTIGRAVITY_ENDPOINT_FALLBACKS.length; i++) {              // Reset capacity retry counter when switching to a new endpoint
               if (i !== lastEndpointIndex) {
                 capacityRetryCount = 0;
                 lastEndpointIndex = i;

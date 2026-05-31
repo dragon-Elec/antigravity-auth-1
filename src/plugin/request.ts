@@ -1750,21 +1750,10 @@ export async function transformAntigravityResponse(
               effectiveModel,
               usage.cachedContentTokenCount,
               0,
-              usage.promptTokenCount || usage.totalTokenCount,
+              usage.promptTokenCount ?? usage.totalTokenCount,
             );
           }
-          if (usage.cachedContentTokenCount !== undefined) {
-            headers.set("x-antigravity-cached-content-token-count", String(usage.cachedContentTokenCount));
-          }
-          if (usage.totalTokenCount !== undefined) {
-            headers.set("x-antigravity-total-token-count", String(usage.totalTokenCount));
-          }
-          if (usage.promptTokenCount !== undefined) {
-            headers.set("x-antigravity-prompt-token-count", String(usage.promptTokenCount));
-          }
-          if (usage.candidatesTokenCount !== undefined) {
-            headers.set("x-antigravity-candidates-token-count", String(usage.candidatesTokenCount));
-          }
+
         },
         transformThinkingParts,
       },      {
