@@ -10,13 +10,20 @@ export interface SignatureStore {
   delete(sessionKey: string): void;
 }
 
+export interface StreamingUsageMetadata {
+  cachedContentTokenCount: number;
+  promptTokenCount: number;
+  candidatesTokenCount: number;
+  totalTokenCount: number;
+}
+
 export interface StreamingCallbacks {
   onCacheSignature?: (sessionKey: string, text: string, signature: string) => void;
   onInjectDebug?: (response: unknown, debugText: string) => unknown;
+  onUsageMetadata?: (usage: StreamingUsageMetadata) => void;
   // Note: onInjectSyntheticThinking removed - keep_thinking now unified with debug via debugText
   transformThinkingParts?: (parts: unknown) => unknown;
 }
-
 export interface StreamingOptions {
   signatureSessionKey?: string;
   debugText?: string;

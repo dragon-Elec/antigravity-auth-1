@@ -2,10 +2,10 @@ import type {
   SignatureStore,
   StreamingCallbacks,
   StreamingOptions,
+  StreamingUsageMetadata,
   ThoughtBuffer,
 } from './types';
 import { processImageData } from '../../image-saver';
-
 /**
  * Simple string hash for thinking deduplication.
  * Uses DJB2-like algorithm.
@@ -176,6 +176,7 @@ export function transformSseLine(
   callbacks: StreamingCallbacks,
   options: StreamingOptions,
   debugState: { injected: boolean },
+  usageState?: { lastUsage: StreamingUsageMetadata | null },
 ): string {
   if (!line.startsWith('data:')) {
     return line;
@@ -196,6 +197,20 @@ export function transformSseLine(
           thoughtBuffer,
           callbacks.onCacheSignature,
         );
+      }
+
+      // Extract usage metadata from streaming chunks
+      if (usageState) {
+        const resp = parsed.response as Record<string, unknown>;
+        const meta = resp.usageMetadata as Record<string, unknown> | undefined;
+        if (meta && typeof meta === "object") {
+          usageState.lastUsage = {
+            cachedContentTokenCount: typeof meta.cachedContentTokenCount === "number" ? meta.cachedContentTokenCount : 0,
+            promptTokenCount: typeof meta.promptTokenCount === "number" ? meta.promptTokenCount : 0,
+            candidatesTokenCount: typeof meta.candidatesTokenCount === "number" ? meta.candidatesTokenCount : 0,
+            totalTokenCount: typeof meta.totalTokenCount === "number" ? meta.totalTokenCount : 0,
+          };
+        }
       }
 
       let response: unknown = deduplicateThinkingText(
@@ -219,8 +234,7 @@ export function transformSseLine(
     console.warn("[antigravity] Malformed SSE chunk in streaming transform, passing through untransformed:", json.slice(0, 200));
   }
   return line;
-}
-export function cacheThinkingSignaturesFromResponse(
+}export function cacheThinkingSignaturesFromResponse(
   response: unknown,
   signatureSessionKey: string,
   signatureStore: SignatureStore,
@@ -296,6 +310,7 @@ export function createStreamingTransformer(
   const sentThinkingBuffer = createThoughtBuffer();
   const debugState = { injected: false };
   let hasSeenUsageMetadata = false;
+  const usageState: { lastUsage: StreamingUsageMetadata | null } = { lastUsage: null };
 
   return new TransformStream({
     transform(chunk, controller) {
@@ -305,7 +320,6 @@ export function createStreamingTransformer(
       buffer = lines.pop() || '';
 
       for (const line of lines) {
-        // Quick check for usage metadata presence in the raw line
         if (line.includes('usageMetadata')) {
           hasSeenUsageMetadata = true;
         }
@@ -318,6 +332,7 @@ export function createStreamingTransformer(
           callbacks,
           options,
           debugState,
+          usageState,
         );
         controller.enqueue(encoder.encode(transformedLine + '\n'));
       }
@@ -337,6 +352,7 @@ export function createStreamingTransformer(
           callbacks,
           options,
           debugState,
+          usageState,
         );
         controller.enqueue(encoder.encode(transformedLine));
       }
@@ -353,6 +369,10 @@ export function createStreamingTransformer(
           }
         };
         controller.enqueue(encoder.encode(`\ndata: ${JSON.stringify(syntheticUsage)}\n\n`));
+      }
+
+      if (usageState.lastUsage && callbacks.onUsageMetadata) {
+        callbacks.onUsageMetadata(usageState.lastUsage);
       }
     },
   });
