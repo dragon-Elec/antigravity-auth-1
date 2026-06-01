@@ -1939,7 +1939,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
               }
             };
 
-            const runCacheWarmupProbe = async (
+                        const runCacheWarmupProbe = async (
               prepared: ReturnType<typeof prepareAntigravityRequest>,
             ): Promise<void> => {
               if (!needsCacheWarmup) return;
@@ -1949,37 +1949,25 @@ export const createAntigravityPlugin = (providerId: string) => async (
               if (!bodyStr) return;
 
               try {
-                const parsed = JSON.parse(bodyStr);
-                const originalThinking = parsed.generationConfig?.thinkingConfig;
-                parsed.generationConfig = {
-                  maxOutputTokens: originalThinking ? 256 : 1,
-                  ...(originalThinking ? { thinkingConfig: { thinkingBudget: 128 } } : {}),
-                };
-
                 pushDebug("cache-warmup-probe: start");
                 const probeResponse = await fetch(toUrlString(prepared.request), {
                   ...prepared.init,
                   method: "POST",
-                  body: JSON.stringify(parsed),
+                  body: bodyStr,
                 });
 
-                let probeBody = "";
                 if (probeResponse.body) {
                   const reader = probeResponse.body.getReader();
-                  const decoder = new TextDecoder();
-                  let chunk;
-                  while (!(chunk = await reader.read()).done) {
-                    probeBody += decoder.decode(chunk.value, { stream: true });
-                  }
-                } else {
-                  probeBody = await probeResponse.text();
+                  // Read first chunk to confirm server processed the prefix, then abort
+                  await reader.read();
+                  await reader.cancel();
                 }
+
                 const status = probeResponse.status;
                 if (status >= 400) {
-                  const errorSnippet = probeBody.slice(0, 200);
-                  pushDebug(`cache-warmup-probe: done status=${status} error=${errorSnippet}`);
-                } else {
                   pushDebug(`cache-warmup-probe: done status=${status}`);
+                } else {
+                  pushDebug(`cache-warmup-probe: done status=${status} (aborted after first chunk)`);
                 }
               } catch (error) {
                 pushDebug(
