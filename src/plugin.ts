@@ -1951,16 +1951,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
               try {
                 const parsed = JSON.parse(bodyStr);
                 parsed.generationConfig = {
-                  ...(parsed.generationConfig ?? {}),
                   maxOutputTokens: 1,
                 };
-                delete parsed.generationConfig.candidateCount;
-                if (parsed.generationConfig.thinkingConfig) {
-                  // Use minimal positive budget — thinkingBudget:0 is rejected for thinking-required models
-                  parsed.generationConfig.thinkingConfig = {
-                    thinkingBudget: 128,
-                  };
-                }
 
                 const probeHeaders = new Headers(prepared.init.headers ?? {});
                 probeHeaders.set("accept", "application/json");
