@@ -60,6 +60,7 @@
     "zod-to-json-schema": "^3.25.1"
   },
   "dependencies": {
+    "@cortexkit/antigravity-auth-core": "1.6.52",
     "@openauthjs/openauth": "^0.4.3",
     "@opencode-ai/plugin": "^0.15.30",
     "proper-lockfile": "^4.1.2",

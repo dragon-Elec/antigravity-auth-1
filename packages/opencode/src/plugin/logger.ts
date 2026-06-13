@@ -8,6 +8,7 @@
  * - OPENCODE_ANTIGRAVITY_CONSOLE_LOG=1 → console output (independent of debug flags)
  */
 
+import { setLogSink } from "@cortexkit/antigravity-auth-core";
 import type { PluginClient } from "./types";
 import { isDebugTuiEnabled } from "./debug";
 import {
@@ -41,6 +42,11 @@ function isConsoleLogEnabled(): boolean {
  */
 export function initLogger(client: PluginClient): void {
   _client = client;
+  // Route core (@cortexkit/antigravity-auth-core) logs into the same TUI/console
+  // sinks the OpenCode logger uses, so logs from migrated core modules surface.
+  setLogSink(({ service, level, message, extra }) => {
+    emitLog(service, level as LogLevel, message, extra);
+  });
 }
 
 /**
@@ -56,31 +62,35 @@ export function initLogger(client: PluginClient): void {
  * log.warn("Token expired", { accountIndex: 0 });
  * ```
  */
+function emitLog(service: string, level: LogLevel, message: string, extra?: Record<string, unknown>): void {
+  // TUI logging: controlled only by debug_tui policy
+  if (isDebugTuiEnabled()) {
+    const app = _client?.app;
+    if (app && typeof app.log === "function") {
+      app
+        .log({
+          body: { service, level, message, extra },
+        })
+        .catch(() => {
+          // Silently ignore logging errors
+        });
+    }
+  }
+
+  // Console fallback: when env var is set (independent of debug flags)
+  if (isConsoleLogEnabled()) {
+    const prefix = `[${service}]`;
+    const args = extra ? [prefix, message, extra] : [prefix, message];
+    writeConsoleLog(level, ...args);
+  }
+  // If neither TUI nor console logging is enabled, log is silently discarded
+}
+
 export function createLogger(module: string): Logger {
   const service = `antigravity.${module}`;
 
   const log = (level: LogLevel, message: string, extra?: Record<string, unknown>): void => {
-    // TUI logging: controlled only by debug_tui policy
-    if (isDebugTuiEnabled()) {
-      const app = _client?.app;
-      if (app && typeof app.log === "function") {
-        app
-          .log({
-            body: { service, level, message, extra },
-          })
-          .catch(() => {
-            // Silently ignore logging errors
-          });
-      }
-    }
-
-    // Console fallback: when env var is set (independent of debug flags)
-    if (isConsoleLogEnabled()) {
-      const prefix = `[${service}]`;
-      const args = extra ? [prefix, message, extra] : [prefix, message];
-      writeConsoleLog(level, ...args);
-    }
-    // If neither TUI nor console logging is enabled, log is silently discarded
+    emitLog(service, level, message, extra);
   };
 
   return {
