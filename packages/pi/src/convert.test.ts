@@ -60,6 +60,44 @@ describe("buildGeminiRequest", () => {
     ])
   })
 
+  it("echoes the thoughtSignature on a replayed tool call", () => {
+    const request = buildGeminiRequest(
+      ctx({
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "c1",
+                name: "read",
+                arguments: { path: "a.ts" },
+                thoughtSignature: "SIG123",
+              },
+            ],
+            api: "google-generative-ai",
+            provider: "google-antigravity",
+            model: "antigravity-gemini-3.5-flash",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 0,
+          },
+        ],
+      }),
+    )
+    expect(request.contents[0]?.parts[0]).toEqual({
+      functionCall: { name: "read", args: { path: "a.ts" } },
+      thoughtSignature: "SIG123",
+    })
+  })
+
   it("groups consecutive tool results into a single user turn", () => {
     const request = buildGeminiRequest(
       ctx({

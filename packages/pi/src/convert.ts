@@ -13,7 +13,7 @@ import type {
 type GeminiPart =
   | { text: string }
   | { inlineData: { mimeType: string; data: string } }
-  | { functionCall: { name: string; args: Record<string, unknown> } }
+  | { functionCall: { name: string; args: Record<string, unknown> }; thoughtSignature?: string }
   | { functionResponse: { name: string; response: Record<string, unknown> } }
 
 interface GeminiContent {
@@ -57,11 +57,14 @@ function convertAssistantParts(content: Array<TextContent | ThinkingContent | To
     if (block.type === "text" && block.text.trim()) {
       parts.push({ text: sanitize(block.text) })
     } else if (block.type === "toolCall") {
+      // Antigravity requires the prior functionCall to echo its
+      // thoughtSignature on replay (400 INVALID_ARGUMENT otherwise).
       parts.push({
         functionCall: {
           name: block.name,
           args: (block.arguments ?? {}) as Record<string, unknown>,
         },
+        ...(block.thoughtSignature ? { thoughtSignature: block.thoughtSignature } : {}),
       })
     }
     // Thinking blocks are intentionally not replayed: OpenCode/pi history does
