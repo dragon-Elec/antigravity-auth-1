@@ -156,7 +156,9 @@ export async function refreshAccessToken(
     };
 
     storeCachedAuth(updatedAuth);
-    invalidateProjectContextCache(auth.refresh);
+    // Project context cache is intentionally not invalidated on successful token
+    // refresh: managedProjectId survives access-token rotation. Invalid grants
+    // still invalidate above because the refresh key is no longer usable.
 
     return updatedAuth;
   } catch (error) {

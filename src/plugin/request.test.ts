@@ -612,6 +612,248 @@ describe("request.ts", () => {
       const output = outputChunks.map(chunk => decoder.decode(chunk)).join("");
       expect(output).toContain("[DONE]");
     });
+
+    it("terminates a finished stream even if the upstream body stays open", async () => {
+      const store = createMockSignatureStore();
+      const transformer = createStreamingTransformer(store, defaultCallbacks);
+      const encoder = new TextEncoder();
+      const decoder = new TextDecoder();
+      const terminalToolCall = {
+        response: {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { functionCall: { name: "read", args: { filePath: "README.md" } } },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      };
+
+      const source = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(terminalToolCall)}\n`));
+        },
+      });
+      const reader = source.pipeThrough(transformer).getReader();
+      let output = "";
+      let done = false;
+
+      for (let i = 0; i < 5; i++) {
+        const result = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("stream did not terminate")), 100)),
+        ]);
+        if (result.done) {
+          done = true;
+          break;
+        }
+        output += decoder.decode(result.value);
+      }
+
+      expect(done).toBe(true);
+      expect(output).toContain("functionCall");
+      expect(output).toContain("usageMetadata");
+      expect(output.endsWith("\n\n")).toBe(true);
+    });
+
+    it("merges terminal cached usage into buffered Gemini tool-call events", async () => {
+      const store = createMockSignatureStore();
+      const transformer = createStreamingTransformer(store, defaultCallbacks);
+      const encoder = new TextEncoder();
+      const decoder = new TextDecoder();
+      const toolCall = {
+        response: {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { functionCall: { name: "bash", args: { command: "printf cache" } } },
+                ],
+              },
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 41880,
+            candidatesTokenCount: 25,
+            thoughtsTokenCount: 45,
+            totalTokenCount: 41950,
+          },
+        },
+      };
+      const terminalStop = {
+        response: {
+          candidates: [
+            {
+              content: { parts: [{ text: "" }] },
+              finishReason: "STOP",
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 41880,
+            cachedContentTokenCount: 40682,
+            candidatesTokenCount: 25,
+            thoughtsTokenCount: 45,
+            totalTokenCount: 41950,
+          },
+        },
+      };
+
+      const source = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(toolCall)}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(terminalStop)}\n`));
+        },
+      });
+      const reader = source.pipeThrough(transformer).getReader();
+      let output = "";
+      let done = false;
+
+      for (let i = 0; i < 5; i++) {
+        const result = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("stream did not terminate")), 100)),
+        ]);
+        if (result.done) {
+          done = true;
+          break;
+        }
+        output += decoder.decode(result.value);
+      }
+
+      expect(done).toBe(true);
+      const dataLines = output
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => JSON.parse(line.slice(6)));
+
+      expect(dataLines[0].candidates[0].content.parts[0].functionCall.name).toBe("bash");
+      expect(dataLines[0].usageMetadata.cachedContentTokenCount).toBe(40682);
+      expect(dataLines[1].candidates[0].finishReason).toBe("STOP");
+      expect(output.endsWith("\n\n")).toBe(true);
+    });
+
+    it("merges terminal cached usage into a short final text event", async () => {
+      const store = createMockSignatureStore();
+      const transformer = createStreamingTransformer(store, defaultCallbacks);
+      const encoder = new TextEncoder();
+      const decoder = new TextDecoder();
+      const textEvent = {
+        response: {
+          candidates: [
+            {
+              content: { parts: [{ text: "CACHE_MERGE_TOOL_OK" }] },
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 41924,
+            candidatesTokenCount: 12,
+            thoughtsTokenCount: 31,
+            totalTokenCount: 41967,
+          },
+        },
+      };
+      const terminalStop = {
+        response: {
+          candidates: [
+            {
+              content: { parts: [{ text: "" }] },
+              finishReason: "STOP",
+            },
+          ],
+          usageMetadata: {
+            promptTokenCount: 41975,
+            cachedContentTokenCount: 40673,
+            candidatesTokenCount: 12,
+            thoughtsTokenCount: 31,
+            totalTokenCount: 42018,
+          },
+        },
+      };
+
+      const source = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(textEvent)}\n\n`));
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(terminalStop)}\n`));
+        },
+      });
+      const reader = source.pipeThrough(transformer).getReader();
+      let output = "";
+      let done = false;
+
+      for (let i = 0; i < 5; i++) {
+        const result = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("stream did not terminate")), 100)),
+        ]);
+        if (result.done) {
+          done = true;
+          break;
+        }
+        output += decoder.decode(result.value);
+      }
+
+      expect(done).toBe(true);
+      const dataLines = output
+        .split("\n")
+        .filter((line) => line.startsWith("data: "))
+        .map((line) => JSON.parse(line.slice(6)));
+
+      expect(dataLines[0].candidates[0].content.parts[0].text).toBe("CACHE_MERGE_TOOL_OK");
+      expect(dataLines[0].usageMetadata.cachedContentTokenCount).toBe(40673);
+      expect(dataLines[1].candidates[0].finishReason).toBe("STOP");
+      expect(output.endsWith("\n\n")).toBe(true);
+    });
+
+    it("terminates a finished empty-text stream even when there is no tool call", async () => {
+      const store = createMockSignatureStore();
+      const transformer = createStreamingTransformer(store, defaultCallbacks);
+      const encoder = new TextEncoder();
+      const decoder = new TextDecoder();
+      const terminalEmptyText = {
+        response: {
+          candidates: [
+            {
+              content: {
+                parts: [
+                  { text: "" },
+                ],
+              },
+              finishReason: "STOP",
+            },
+          ],
+        },
+      };
+
+      const source = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(terminalEmptyText)}\n`));
+        },
+      });
+      const reader = source.pipeThrough(transformer).getReader();
+      let output = "";
+      let done = false;
+
+      for (let i = 0; i < 5; i++) {
+        const result = await Promise.race([
+          reader.read(),
+          new Promise<never>((_, reject) => setTimeout(() => reject(new Error("stream did not terminate")), 100)),
+        ]);
+        if (result.done) {
+          done = true;
+          break;
+        }
+        output += decoder.decode(result.value);
+      }
+
+      expect(done).toBe(true);
+      expect(output).toContain("finishReason");
+      expect(output).toContain("usageMetadata");
+      expect(output.endsWith("\n\n")).toBe(true);
+    });
   });
 
   describe("prepareAntigravityRequest", () => {
@@ -737,6 +979,24 @@ it("removes x-api-key header", () => {
       expect(parsed.requestType).toBeUndefined();
       expect(parsed.userAgent).toBeUndefined();
       expect(parsed.requestId).toBeUndefined();
+    });
+
+    it("orders antigravity envelope fields like captured agy CLI", () => {
+      const result = prepareAntigravityRequest(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash:generateContent",
+        { method: "POST", body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "hi" }] }] }) },
+        mockAccessToken,
+        mockProjectId,
+        undefined,
+        "antigravity"
+      );
+
+      const body = result.init.body as string;
+      const parsed = JSON.parse(body);
+      expect(Object.keys(parsed)).toEqual(["project", "requestId", "request", "model", "userAgent", "requestType"]);
+      expect(parsed.requestId).toMatch(/^agent\/.+\/2$/);
+      expect(parsed.userAgent).toBe("antigravity");
+      expect(parsed.requestType).toBe("agent");
     });
 
     it("identifies Claude models correctly", () => {
@@ -1173,7 +1433,7 @@ it("removes x-api-key header", () => {
         expect(result.effectiveModel).toBe("gemini-3.1-pro-low");
       });
 
-      it("maps Gemini 3.5 Flash to the live Antigravity high-tier model", () => {
+      it("maps Gemini 3.5 Flash to the captured agy medium model", () => {
         const result = prepareAntigravityRequest(
           "https://generativelanguage.googleapis.com/v1beta/models/antigravity-gemini-3.5-flash:generateContent",
           { method: "POST", body: JSON.stringify({ contents: [] }) },
@@ -1183,8 +1443,29 @@ it("removes x-api-key header", () => {
           "antigravity"
         );
         const wrapped = JSON.parse(result.init.body as string);
-        expect(result.effectiveModel).toBe("gemini-3-flash-agent");
-        expect(wrapped.model).toBe("gemini-3-flash-agent");
+        expect(result.effectiveModel).toBe("gemini-3.5-flash-low");
+        expect(wrapped.model).toBe("gemini-3.5-flash-low");
+        expect(wrapped.request.generationConfig.thinkingConfig.thinkingBudget).toBe(4000);
+        expect(wrapped.request.generationConfig.maxOutputTokens).toBe(65536);
+      });
+
+      it("maps Claude Sonnet 4.6 Thinking to the captured agy thinking config", () => {
+        const result = prepareAntigravityRequest(
+          "https://generativelanguage.googleapis.com/v1beta/models/antigravity-claude-sonnet-4-6-thinking:generateContent",
+          { method: "POST", body: JSON.stringify({ contents: [], generationConfig: {} }) },
+          mockAccessToken,
+          mockProjectId,
+          undefined,
+          "antigravity"
+        );
+        const wrapped = JSON.parse(result.init.body as string);
+        expect(result.effectiveModel).toBe("claude-sonnet-4-6");
+        expect(wrapped.model).toBe("claude-sonnet-4-6");
+        expect(wrapped.request.generationConfig.thinkingConfig).toEqual({
+          includeThoughts: true,
+          thinkingBudget: 1024,
+        });
+        expect(wrapped.request.generationConfig.maxOutputTokens).toBe(64000);
       });
 
       it("maps Gemini 3.5 Flash medium variant to the live Antigravity medium-tier model", () => {
@@ -1206,7 +1487,9 @@ it("removes x-api-key header", () => {
         const wrapped = JSON.parse(result.init.body as string);
         expect(result.effectiveModel).toBe("gemini-3.5-flash-low");
         expect(wrapped.model).toBe("gemini-3.5-flash-low");
-        expect(wrapped.request.generationConfig.thinkingConfig.thinkingLevel).toBe("medium");
+        expect(wrapped.request.generationConfig.thinkingConfig.thinkingBudget).toBe(4000);
+        expect(wrapped.request.generationConfig.maxOutputTokens).toBe(65536);
+        expect(wrapped.request.generationConfig.thinkingConfig.thinkingLevel).toBeUndefined();
       });
 
       it("transforms gemini-3-flash to gemini-3-flash-preview for gemini-cli headerStyle", () => {
@@ -1313,7 +1596,7 @@ it("removes x-api-key header", () => {
         undefined,
         "gemini-2.5-pro",
         "test-project",
-        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:generateContent",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
         "gemini-2.5-pro",
         "session-1",
         0,
@@ -1321,7 +1604,7 @@ it("removes x-api-key header", () => {
         undefined,
         [
           "status=500 INTERNAL",
-          "endpoint=https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:generateContent",
+          "endpoint=https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent",
           "account=test@example.com",
         ],
       );
@@ -1329,7 +1612,7 @@ it("removes x-api-key header", () => {
       const bodyText = await transformed.text();
       expect(bodyText).toContain("[ThinkingResolution]");
       expect(bodyText).toContain("status=500 INTERNAL");
-      expect(bodyText).toContain("endpoint=https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:generateContent");
+      expect(bodyText).toContain("endpoint=https://daily-cloudcode-pa.googleapis.com/v1internal:generateContent");
       expect(bodyText).toContain("account=test@example.com");
 
       initializeDebug(DEFAULT_CONFIG);
@@ -1356,7 +1639,7 @@ it("removes x-api-key header", () => {
         undefined,
         "antigravity-claude-opus-4-6-thinking",
         "test-project",
-        "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+        "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
         "claude-opus-4-6-thinking",
         "session-1",
         0,
@@ -1388,7 +1671,7 @@ it("removes x-api-key header", () => {
           undefined,
           "antigravity-claude-opus-4-6-thinking",
           "test-project",
-          "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:streamGenerateContent?alt=sse",
+          "https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse",
           "claude-opus-4-6-thinking",
           "session-1",
         ),

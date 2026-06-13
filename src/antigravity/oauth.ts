@@ -7,11 +7,15 @@ import {
   ANTIGRAVITY_SCOPES,
   ANTIGRAVITY_ENDPOINT_FALLBACKS,
   ANTIGRAVITY_LOAD_ENDPOINTS,
-  getAntigravityHeaders,
   GEMINI_CLI_HEADERS,
 } from "../constants";
 import { createLogger } from "../plugin/logger";
 import { calculateTokenExpiry } from "../plugin/auth";
+import { fetchWithAgyCliTransport } from "../plugin/agy-transport";
+import {
+  buildAntigravityHarnessBootstrapHeaders,
+  buildAntigravityLoadCodeAssistMetadata,
+} from "../plugin/fingerprint";
 
 const log = createLogger("oauth");
 
@@ -113,30 +117,9 @@ export async function authorizeAntigravity(projectId = ""): Promise<AntigravityA
   };
 }
 
-const FETCH_TIMEOUT_MS = 10000;
-
-async function fetchWithTimeout(
-  url: string,
-  options: RequestInit,
-  timeoutMs = FETCH_TIMEOUT_MS,
-): Promise<Response> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    return await fetch(url, { ...options, signal: controller.signal });
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 async function fetchProjectID(accessToken: string): Promise<string> {
   const errors: string[] = [];
-  const loadHeaders: Record<string, string> = {
-    Authorization: `Bearer ${accessToken}`,
-    "Content-Type": "application/json",
-    "User-Agent": GEMINI_CLI_HEADERS["User-Agent"],
-    "Client-Metadata": getAntigravityHeaders()["Client-Metadata"],
-  };
+  const loadHeaders = buildAntigravityHarnessBootstrapHeaders(accessToken);
 
   const loadEndpoints = Array.from(
     new Set<string>([...ANTIGRAVITY_LOAD_ENDPOINTS, ...ANTIGRAVITY_ENDPOINT_FALLBACKS]),
@@ -145,17 +128,11 @@ async function fetchProjectID(accessToken: string): Promise<string> {
   for (const baseEndpoint of loadEndpoints) {
     try {
       const url = `${baseEndpoint}/v1internal:loadCodeAssist`;
-      const response = await fetchWithTimeout(url, {
+      const response = await fetchWithAgyCliTransport(url, {
         method: "POST",
         headers: loadHeaders,
-        body: JSON.stringify({
-          metadata: {
-            ideType: "ANTIGRAVITY",
-            platform: process.platform === "win32" ? "WINDOWS" : "MACOS",
-            pluginType: "GEMINI",
-          },
-        }),
-      });
+        body: JSON.stringify({ metadata: buildAntigravityLoadCodeAssistMetadata() }),
+      }, { timeoutMs: 10000 });
 
       if (!response.ok) {
         const message = await response.text().catch(() => "");

@@ -34,33 +34,37 @@ describe("resolveModelWithTier", () => {
       expect(result.quotaPreference).toBe("antigravity");
     });
 
-    it("gemini-3.1-pro-preview gets default thinkingLevel 'low' with antigravity quota", () => {
+    it("gemini-3.1-pro-preview resolves to captured agy low route with antigravity quota", () => {
       const result = resolveModelWithTier("gemini-3.1-pro-preview");
-      expect(result.actualModel).toBe("gemini-3.1-pro-preview");
-      expect(result.thinkingLevel).toBe("low");
+      expect(result.actualModel).toBe("gemini-3.1-pro-low");
+      expect(result.thinkingBudget).toBe(1001);
+      expect(result.thinkingLevel).toBeUndefined();
       expect(result.quotaPreference).toBe("antigravity");
     });
   });
 
   describe("Gemini 3.5 Flash Antigravity aliases", () => {
-    it("antigravity-gemini-3.5-flash uses the live high-tier Antigravity model", () => {
+    it("antigravity-gemini-3.5-flash uses the captured agy medium model", () => {
       const result = resolveModelWithTier("antigravity-gemini-3.5-flash");
-      expect(result.actualModel).toBe("gemini-3-flash-agent");
-      expect(result.thinkingLevel).toBe("high");
+      expect(result.actualModel).toBe("gemini-3.5-flash-low");
+      expect(result.thinkingBudget).toBe(4000);
+      expect(result.thinkingLevel).toBeUndefined();
       expect(result.quotaPreference).toBe("antigravity");
     });
 
     it("antigravity-gemini-3.5-flash-high uses the live high-tier Antigravity model", () => {
       const result = resolveModelWithTier("antigravity-gemini-3.5-flash-high");
       expect(result.actualModel).toBe("gemini-3-flash-agent");
-      expect(result.thinkingLevel).toBe("high");
+      expect(result.thinkingBudget).toBe(10000);
+      expect(result.thinkingLevel).toBeUndefined();
       expect(result.quotaPreference).toBe("antigravity");
     });
 
     it("antigravity-gemini-3.5-flash-medium uses the live medium-tier Antigravity model", () => {
       const result = resolveModelWithTier("antigravity-gemini-3.5-flash-medium");
       expect(result.actualModel).toBe("gemini-3.5-flash-low");
-      expect(result.thinkingLevel).toBe("medium");
+      expect(result.thinkingBudget).toBe(4000);
+      expect(result.thinkingLevel).toBeUndefined();
       expect(result.quotaPreference).toBe("antigravity");
     });
   });
@@ -135,15 +139,16 @@ describe("resolveModelWithTier", () => {
     it("antigravity-gemini-3.1-pro gets default -low model", () => {
       const result = resolveModelWithTier("antigravity-gemini-3.1-pro");
       expect(result.actualModel).toBe("gemini-3.1-pro-low");
-      expect(result.thinkingLevel).toBe("low");
+      expect(result.thinkingBudget).toBe(1001);
+      expect(result.thinkingLevel).toBeUndefined();
     });
   });
 
   describe("Claude thinking models default budget", () => {
-    it("antigravity-claude-opus-4-6-thinking gets default medium budget (16384)", () => {
+    it("antigravity-claude-opus-4-6-thinking gets captured agy budget", () => {
       const result = resolveModelWithTier("antigravity-claude-opus-4-6-thinking");
       expect(result.actualModel).toBe("claude-opus-4-6-thinking");
-      expect(result.thinkingBudget).toBe(16384);
+      expect(result.thinkingBudget).toBe(1024);
       expect(result.isThinkingModel).toBe(true);
       expect(result.quotaPreference).toBe("antigravity");
     });
@@ -166,10 +171,11 @@ describe("resolveModelWithTier", () => {
       expect(result.explicitQuota).toBe(true);
     });
 
-    it("gemini-claude-sonnet-4-6 alias resolves to claude-sonnet-4-6-thinking", () => {
+    it("gemini-claude-sonnet-4-6 alias resolves to captured agy Sonnet thinking route", () => {
       const result = resolveModelWithTier("gemini-claude-sonnet-4-6");
-      expect(result.actualModel).toBe("claude-sonnet-4-6-thinking");
+      expect(result.actualModel).toBe("claude-sonnet-4-6");
       expect(result.isThinkingModel).toBe(true);
+      expect(result.thinkingBudget).toBe(1024);
       expect(result.quotaPreference).toBe("antigravity");
     });  });
 
@@ -197,7 +203,7 @@ describe("resolveModelWithVariant", () => {
     it("falls back to tier resolution for Claude thinking models", () => {
       const result = resolveModelWithVariant("claude-opus-4-6-thinking-low");
       expect(result.actualModel).toBe("claude-opus-4-6-thinking");
-      expect(result.thinkingBudget).toBe(8192);
+      expect(result.thinkingBudget).toBe(1024);
       expect(result.configSource).toBeUndefined();
     });
 
@@ -258,13 +264,13 @@ describe("resolveModelWithVariant", () => {
   describe("backward compatibility", () => {
     it("tier-suffixed models work without variant config", () => {
       const lowResult = resolveModelWithVariant("claude-opus-4-6-thinking-low");
-      expect(lowResult.thinkingBudget).toBe(8192);
+      expect(lowResult.thinkingBudget).toBe(1024);
 
       const medResult = resolveModelWithVariant("claude-opus-4-6-thinking-medium");
-      expect(medResult.thinkingBudget).toBe(16384);
+      expect(medResult.thinkingBudget).toBe(1024);
 
       const highResult = resolveModelWithVariant("claude-opus-4-6-thinking-high");
-      expect(highResult.thinkingBudget).toBe(32768);
+      expect(highResult.thinkingBudget).toBe(1024);
     });
 
     it("variant config overrides tier suffix", () => {
@@ -302,10 +308,11 @@ describe("Issue #103: resolveModelForHeaderStyle", () => {
       expect(result.quotaPreference).toBe("antigravity");
     });
 
-    it("maps gemini-3.5-flash to the live Antigravity high-tier model", () => {
+    it("maps gemini-3.5-flash to the captured agy medium Antigravity model", () => {
       const result = resolveModelForHeaderStyle("gemini-3.5-flash", "antigravity");
-      expect(result.actualModel).toBe("gemini-3-flash-agent");
-      expect(result.thinkingLevel).toBe("high");
+      expect(result.actualModel).toBe("gemini-3.5-flash-low");
+      expect(result.thinkingBudget).toBe(4000);
+      expect(result.thinkingLevel).toBeUndefined();
       expect(result.quotaPreference).toBe("antigravity");
     });
   });

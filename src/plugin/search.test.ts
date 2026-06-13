@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("./agy-transport", () => ({
+  fetchWithAgyCliTransport: vi.fn(),
+}));
+
+import { fetchWithAgyCliTransport } from "./agy-transport";
 import { executeSearch } from "./search";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -38,11 +44,18 @@ function mockFetch(body: unknown, status = 200) {
   });
 }
 
+function mockAgyTransport(body: unknown, status = 200) {
+  const spy = mockFetch(body, status)
+  vi.mocked(fetchWithAgyCliTransport).mockImplementation(spy)
+  return spy
+}
+
 // ─── executeSearch ────────────────────────────────────────────────────────────
 
 describe("executeSearch", () => {
   beforeEach(() => {
-    vi.stubGlobal("fetch", mockFetch(makeResponse("Default result")));
+    vi.mocked(fetchWithAgyCliTransport).mockReset()
+    mockAgyTransport(makeResponse("Default result"))
   });
 
   afterEach(() => {
@@ -50,20 +63,17 @@ describe("executeSearch", () => {
   });
 
   it("returns formatted text from the response", async () => {
-    vi.stubGlobal("fetch", mockFetch(makeResponse("The answer is 42.")));
+    mockAgyTransport(makeResponse("The answer is 42."));
     const result = await executeSearch({ query: "what is 42?" }, "tok", "proj");
     expect(result).toContain("The answer is 42.");
     expect(result).toContain("## Search Results");
   });
 
   it("lists sources from groundingChunks (uses groundingMeta internally)", async () => {
-    vi.stubGlobal(
-      "fetch",
-      mockFetch(
-        makeResponse("answer", {
-          chunks: [{ title: "Example", uri: "https://example.com/page" }],
-        }),
-      ),
+    mockAgyTransport(
+      makeResponse("answer", {
+        chunks: [{ title: "Example", uri: "https://example.com/page" }],
+      }),
     );
     const result = await executeSearch({ query: "q" }, "tok", "proj");
     expect(result).toContain("### Sources");
@@ -72,25 +82,19 @@ describe("executeSearch", () => {
   });
 
   it("includes search queries section when queries are present", async () => {
-    vi.stubGlobal(
-      "fetch",
-      mockFetch(makeResponse("res", { searchQueries: ["my query"] })),
-    );
+    mockAgyTransport(makeResponse("res", { searchQueries: ["my query"] }));
     const result = await executeSearch({ query: "my query" }, "tok", "proj");
     expect(result).toContain("### Search Queries Used");
     expect(result).toContain('"my query"');
   });
 
   it("marks successful URL retrieval with ✓", async () => {
-    vi.stubGlobal(
-      "fetch",
-      mockFetch(
-        makeResponse("ok", {
-          urlMetadata: [
-            { retrieved_url: "https://docs.example.com", url_retrieval_status: "URL_RETRIEVAL_STATUS_SUCCESS" },
-          ],
-        }),
-      ),
+    mockAgyTransport(
+      makeResponse("ok", {
+        urlMetadata: [
+          { retrieved_url: "https://docs.example.com", url_retrieval_status: "URL_RETRIEVAL_STATUS_SUCCESS" },
+        ],
+      }),
     );
     const result = await executeSearch({ query: "q", urls: ["https://docs.example.com"] }, "tok", "proj");
     expect(result).toContain("✓");
@@ -98,41 +102,45 @@ describe("executeSearch", () => {
   });
 
   it("marks failed URL retrieval with ✗", async () => {
-    vi.stubGlobal(
-      "fetch",
-      mockFetch(
-        makeResponse("ok", {
-          urlMetadata: [
-            { retrieved_url: "https://broken.example.com", url_retrieval_status: "URL_RETRIEVAL_STATUS_ERROR" },
-          ],
-        }),
-      ),
+    mockAgyTransport(
+      makeResponse("ok", {
+        urlMetadata: [
+          { retrieved_url: "https://broken.example.com", url_retrieval_status: "URL_RETRIEVAL_STATUS_ERROR" },
+        ],
+      }),
     );
     const result = await executeSearch({ query: "q", urls: ["https://broken.example.com"] }, "tok", "proj");
     expect(result).toContain("✗");
   });
 
   it("returns error block on non-OK HTTP response", async () => {
-    vi.stubGlobal("fetch", mockFetch({ error: "bad" }, 400));
+    mockAgyTransport({ error: "bad" }, 400);
     const result = await executeSearch({ query: "q" }, "tok", "proj");
     expect(result).toContain("## Search Error");
     expect(result).toContain("400");
   });
 
   it("returns error block when fetch throws", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Network down")));
+    vi.mocked(fetchWithAgyCliTransport).mockRejectedValue(new Error("Network down"));
     const result = await executeSearch({ query: "q" }, "tok", "proj");
     expect(result).toContain("## Search Error");
     expect(result).toContain("Network down");
   });
 
-  it("includes Authorization header with the provided token", async () => {
-    const spy = mockFetch(makeResponse("ok"));
-    vi.stubGlobal("fetch", spy);
+  it("uses captured agy CLI content headers and envelope ordering", async () => {
+    const spy = mockAgyTransport(makeResponse("ok"));
     await executeSearch({ query: "q" }, "bearer-token-xyz", "proj");
     const [, init] = spy.mock.calls[0] as [string, RequestInit];
-    expect((init.headers as Record<string, string>)["Authorization"]).toBe(
-      "Bearer bearer-token-xyz",
-    );
+    const headers = init.headers as Record<string, string>;
+    const body = JSON.parse(init.body as string);
+
+    expect(headers["Authorization"]).toBe("Bearer bearer-token-xyz");
+    expect(headers["User-Agent"]).toMatch(/^antigravity\/cli\/1\.0\.4 /);
+    expect(headers["X-Goog-Api-Client"]).toBeUndefined();
+    expect(headers["Client-Metadata"]).toBeUndefined();
+    expect(Object.keys(body)).toEqual(["project", "requestId", "request", "model", "userAgent", "requestType"]);
+    expect(body.requestId).toMatch(/^agent\/.+\/2$/);
+    expect(body.userAgent).toBe("antigravity");
+    expect(body.requestType).toBe("agent");
   });
 });

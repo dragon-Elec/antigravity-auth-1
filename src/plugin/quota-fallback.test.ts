@@ -27,6 +27,7 @@ type ResolveHeaderRoutingDecision = (
 let resolveQuotaFallbackHeaderStyle: ResolveQuotaFallbackHeaderStyle | undefined;
 let getHeaderStyleFromUrl: GetHeaderStyleFromUrl | undefined;
 let resolveHeaderRoutingDecision: ResolveHeaderRoutingDecision | undefined;
+let isCapacityRetryBudgetExhausted: ((totalCapacityRetries: number) => boolean) | undefined;
 
 beforeAll(async () => {
   vi.mock("@opencode-ai/plugin", () => ({
@@ -43,6 +44,9 @@ beforeAll(async () => {
   resolveHeaderRoutingDecision = (__testExports as {
     resolveHeaderRoutingDecision?: ResolveHeaderRoutingDecision;
   }).resolveHeaderRoutingDecision;
+  isCapacityRetryBudgetExhausted = (__testExports as {
+    isCapacityRetryBudgetExhausted?: (totalCapacityRetries: number) => boolean;
+  }).isCapacityRetryBudgetExhausted;
 });
 
 describe("quota fallback direction", () => {
@@ -219,3 +223,15 @@ describe("header routing decision", () => {
       allowQuotaFallback: false,
     });
   });});
+
+describe("capacity retry guard", () => {
+  it("keeps capacity retries below the total budget", () => {
+    expect(isCapacityRetryBudgetExhausted?.(0)).toBe(false);
+    expect(isCapacityRetryBudgetExhausted?.(3)).toBe(false);
+  });
+
+  it("exhausts capacity retries at the bounded total budget", () => {
+    expect(isCapacityRetryBudgetExhausted?.(4)).toBe(true);
+    expect(isCapacityRetryBudgetExhausted?.(5)).toBe(true);
+  });
+});

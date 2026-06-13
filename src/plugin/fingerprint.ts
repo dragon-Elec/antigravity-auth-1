@@ -1,40 +1,16 @@
 /**
  * Device Fingerprint Generator for Rate Limit Mitigation
  *
- * Ported from antigravity-claude-proxy PR #170
- * https://github.com/badrisnarayanan/antigravity-claude-proxy/pull/170
- *
- * Generates randomized device fingerprints to help distribute API usage
- * across different apparent device identities.
+ * Uses the agy CLI content-request identity captured with mitmproxy:
+ * a short Antigravity CLI User-Agent with a normalized runtime platform tuple.
+ * The stored deviceId/sessionToken fields are
+ * retained for account history, but content requests only send User-Agent.
  */
 
 import * as crypto from "node:crypto";
-import * as os from "node:os";
-import { getAntigravityVersion } from "../constants";
 
-const OS_VERSIONS: Record<string, string[]> = {
-  darwin: ["10.15.7", "11.6.8", "12.6.3", "13.5.2", "14.2.1", "14.5"],
-  win32: ["10.0.19041", "10.0.19042", "10.0.19043", "10.0.22000", "10.0.22621", "10.0.22631"],
-  linux: ["5.15.0", "5.19.0", "6.1.0", "6.2.0", "6.5.0", "6.6.0"],
-};
-
-const ARCHITECTURES = ["x64", "arm64"];
-
-const IDE_TYPES = [
-  "ANTIGRAVITY",
-] as const;
-
-const PLATFORMS = [
-  "WINDOWS",
-  "MACOS",
-] as const;
-
-const SDK_CLIENTS = [
-  "google-cloud-sdk vscode_cloudshelleditor/0.1",
-  "google-cloud-sdk vscode/1.86.0",
-  "google-cloud-sdk vscode/1.87.0",
-  "google-cloud-sdk vscode/1.96.0",
-];
+export const AGY_CLI_VERSION = "1.0.4";
+const ANTIGRAVITY_API_CLIENT = "antigravity-cli";
 
 export interface ClientMetadata {
   ideType: string;
@@ -67,17 +43,57 @@ export interface FingerprintHeaders {
   "User-Agent": string;
 }
 
-const PLATFORM_CHOICES = ["darwin", "win32"] as const;
-type PlatformChoice = typeof PLATFORM_CHOICES[number];
-
-function randomFrom<T>(arr: readonly T[]): T {
-  const index = crypto.getRandomValues(new Uint32Array(1))[0]! % arr.length;
-  return arr[index]!;
+function normalizeHarnessPlatform(platform = process.platform): string {
+  return platform === "win32" ? "windows" : platform || "unknown";
 }
 
-function platformToDisplayName(platform: string): "WINDOWS" | "MACOS" {
+function normalizeHarnessArch(arch = process.arch): string {
+  switch (arch) {
+    case "x64":
+      return "amd64";
+    case "ia32":
+      return "386";
+    default:
+      return arch || "unknown";
+  }
+}
+
+export function buildAntigravityHarnessPlatformArch(
+  platform = process.platform,
+  arch = process.arch,
+): string {
+  return `${normalizeHarnessPlatform(platform)}/${normalizeHarnessArch(arch)}`;
+}
+
+export function buildAntigravityHarnessUserAgent(
+  version = AGY_CLI_VERSION,
+  platform = process.platform,
+  arch = process.arch,
+): string {
+  return `antigravity/cli/${version} ${buildAntigravityHarnessPlatformArch(platform, arch)}`;
+}
+
+export function buildAntigravityHarnessLoadCodeAssistUserAgent(version = AGY_CLI_VERSION): string {
+  return buildAntigravityHarnessUserAgent(version);
+}
+
+function platformToMetadataPlatform(platform: string = process.platform): "WINDOWS" | "MACOS" {
   return platform === "win32" ? "WINDOWS" : "MACOS";
 }
+
+export function buildAntigravityLoadCodeAssistMetadata(): Record<string, string> {
+  return { ideType: "ANTIGRAVITY" };
+}
+
+export function buildAntigravityHarnessBootstrapHeaders(accessToken: string): Record<string, string> {
+  return {
+    "User-Agent": buildAntigravityHarnessLoadCodeAssistUserAgent(),
+    Authorization: `Bearer ${accessToken}`,
+    "Content-Type": "application/json",
+    "Accept-Encoding": "gzip",
+  };
+}
+
 function generateDeviceId(): string {
   return crypto.randomUUID();
 }
@@ -87,44 +103,18 @@ function generateSessionToken(): string {
 }
 
 /**
- * Generate a randomized device fingerprint.
- * Each fingerprint represents a unique "device" identity.
+ * Generate the per-account content-request fingerprint.
+ * The outward HTTP identity is stable; deviceId/sessionToken remain unique for history.
  */
 export function generateFingerprint(): Fingerprint {
-  const platform = randomFrom(PLATFORM_CHOICES);
-  const arch = randomFrom(ARCHITECTURES);
-  const osVersion = randomFrom(OS_VERSIONS[platform] ?? OS_VERSIONS.darwin!);
-
   return {
     deviceId: generateDeviceId(),
     sessionToken: generateSessionToken(),
-    userAgent: `antigravity/${getAntigravityVersion()} ${platform}/${arch}`,
-    apiClient: randomFrom(SDK_CLIENTS),
-    clientMetadata: {
-      ideType: randomFrom(IDE_TYPES),
-      platform: platformToDisplayName(platform),
-      pluginType: "GEMINI",
-    },
-    createdAt: Date.now(),
-  };
-}
-
-/**
- * Collect fingerprint based on actual current system.
- * Uses real OS info instead of randomized values.
- */
-export function collectCurrentFingerprint(): Fingerprint {
-  const platform = os.platform();
-  const arch = os.arch();
-
-  return {
-    deviceId: generateDeviceId(),
-    sessionToken: generateSessionToken(),
-    userAgent: `antigravity/${getAntigravityVersion()} ${platform}/${arch}`,
-    apiClient: "google-cloud-sdk vscode_cloudshelleditor/0.1",
+    userAgent: buildAntigravityHarnessUserAgent(),
+    apiClient: ANTIGRAVITY_API_CLIENT,
     clientMetadata: {
       ideType: "ANTIGRAVITY",
-      platform: platformToDisplayName(platform),
+      platform: platformToMetadataPlatform(),
       pluginType: "GEMINI",
     },
     createdAt: Date.now(),
@@ -132,20 +122,25 @@ export function collectCurrentFingerprint(): Fingerprint {
 }
 
 /**
- * Update the version in a fingerprint's userAgent to match the current runtime version.
- * Called after version fetcher resolves so saved fingerprints always carry the latest version.
- * Returns true if the userAgent was changed.
+ * Collect the current content-request fingerprint.
+ */
+export function collectCurrentFingerprint(): Fingerprint {
+  return generateFingerprint();
+}
+
+/**
+ * Update a saved fingerprint's User-Agent to the current Antigravity
+ * agy CLI identity. This migrates older randomized fingerprints such as
+ * win32/x64 to the captured CLI-compatible platform/arch form.
+ * Returns true if the User-Agent was changed.
  */
 export function updateFingerprintVersion(fingerprint: Fingerprint): boolean {
-  const currentVersion = getAntigravityVersion();
-  const versionPattern = /^(antigravity\/)([\d.]+)/;
-  const match = fingerprint.userAgent.match(versionPattern);
-
-  if (!match || match[2] === currentVersion) {
+  const userAgent = buildAntigravityHarnessUserAgent();
+  if (fingerprint.userAgent === userAgent) {
     return false;
   }
 
-  fingerprint.userAgent = fingerprint.userAgent.replace(versionPattern, `$1${currentVersion}`);
+  fingerprint.userAgent = userAgent;
   return true;
 }
 

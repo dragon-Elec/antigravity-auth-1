@@ -1,9 +1,10 @@
 import {
   ANTIGRAVITY_ENDPOINT_FALLBACKS,
-  getAntigravityHeaders,
   ANTIGRAVITY_PROVIDER_ID,
   buildGeminiCliUserAgent,
-} from "../constants";import { accessTokenExpired, formatRefreshParts, parseRefreshParts } from "./auth";
+} from "../constants";import { fetchWithAgyCliTransport } from "./agy-transport";
+import { accessTokenExpired, formatRefreshParts, parseRefreshParts } from "./auth";
+import { buildAntigravityHarnessUserAgent } from "./fingerprint";
 import { logQuotaFetch, logQuotaStatus } from "./debug";
 import { ensureProjectContext } from "./project";
 import { getQuotaGroupForModel } from "./model-registry";
@@ -214,21 +215,22 @@ async function fetchAvailableModels(
   accessToken: string,
   projectId: string,
 ): Promise<FetchAvailableModelsResponse> {
-  const quotaUserAgent = getAntigravityHeaders()["User-Agent"] || "antigravity/windows/amd64";
+  const quotaUserAgent = buildAntigravityHarnessUserAgent();
   const errors: string[] = [];
 
   for (const endpoint of ANTIGRAVITY_ENDPOINT_FALLBACKS) {
     const body = projectId ? { project: projectId } : {};
     try {
-      const response = await fetchWithTimeout(`${endpoint}/v1internal:fetchAvailableModels`, {
+      const response = await fetchWithAgyCliTransport(`${endpoint}/v1internal:fetchAvailableModels`, {
         method: "POST",
         headers: {
+          "User-Agent": quotaUserAgent,
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
-          "User-Agent": quotaUserAgent,
+          "Accept-Encoding": "gzip",
         },
         body: JSON.stringify(body),
-      });
+      }, { timeoutMs: FETCH_TIMEOUT_MS });
 
       if (response.ok) {
         return (await response.json()) as FetchAvailableModelsResponse;
@@ -239,15 +241,16 @@ async function fetchAvailableModels(
       // 403: retry once without project (like AntigravityManager)
       if (status === 403 && projectId) {
         try {
-          const retryResponse = await fetchWithTimeout(`${endpoint}/v1internal:fetchAvailableModels`, {
+          const retryResponse = await fetchWithAgyCliTransport(`${endpoint}/v1internal:fetchAvailableModels`, {
             method: "POST",
             headers: {
+              "User-Agent": quotaUserAgent,
               Authorization: `Bearer ${accessToken}`,
               "Content-Type": "application/json",
-              "User-Agent": quotaUserAgent,
+              "Accept-Encoding": "gzip",
             },
             body: JSON.stringify({}),
-          });
+          }, { timeoutMs: FETCH_TIMEOUT_MS });
           if (retryResponse.ok) {
             return (await retryResponse.json()) as FetchAvailableModelsResponse;
           }

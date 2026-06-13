@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 /**
  * Google Search Tool Implementation
  *
@@ -8,11 +10,12 @@
 
 import {
   ANTIGRAVITY_ENDPOINT,
-  getAntigravityHeaders,
   SEARCH_MODEL,
   SEARCH_TIMEOUT_MS,
   SEARCH_SYSTEM_INSTRUCTION,
 } from "../constants";
+import { fetchWithAgyCliTransport } from "./agy-transport";
+import { buildFingerprintHeaders, getSessionFingerprint } from "./fingerprint";
 import { createLogger } from "./logger";
 
 const log = createLogger("search");
@@ -102,7 +105,7 @@ let sessionCounter = 0;
 const sessionPrefix = `search-${Date.now().toString(36)}`;
 
 function generateRequestId(): string {
-  return `search-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  return `agent/${crypto.randomUUID()}/${Date.now()}/${crypto.randomUUID()}/2`;
 }
 
 function getSessionId(): string {
@@ -259,16 +262,17 @@ export async function executeSearch(
     },
   };
 
-  // Wrap in Antigravity format
+  // Wrap in Antigravity format using the captured agy CLI envelope ordering.
   const wrappedBody = {
     project: projectId,
-    model: SEARCH_MODEL,
-    userAgent: "antigravity",
     requestId: generateRequestId(),
     request: {
       ...requestPayload,
       sessionId: getSessionId(),
     },
+    model: SEARCH_MODEL,
+    userAgent: "antigravity",
+    requestType: "agent",
   };
 
   // Use non-streaming endpoint for search
@@ -281,16 +285,17 @@ export async function executeSearch(
   });
 
   try {
-    const response = await fetch(url, {
+    const fingerprintHeaders = buildFingerprintHeaders(getSessionFingerprint());
+    const response = await fetchWithAgyCliTransport(url, {
       method: "POST",
       headers: {
-        ...getAntigravityHeaders(),
+        "User-Agent": fingerprintHeaders["User-Agent"] ?? getSessionFingerprint().userAgent,
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
+        "Accept-Encoding": "gzip",
       },
       body: JSON.stringify(wrappedBody),
-      signal: abortSignal ?? AbortSignal.timeout(SEARCH_TIMEOUT_MS),
-    });
+    }, { signal: abortSignal ?? AbortSignal.timeout(SEARCH_TIMEOUT_MS) });
 
     if (!response.ok) {
       const errorText = await response.text();

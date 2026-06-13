@@ -345,9 +345,9 @@ export const AntigravityConfigSchema = z.object({
      * Lower values reduce quota waste from cascading rate limits across accounts.
      * 
      * Env override: OPENCODE_ANTIGRAVITY_MAX_ACCOUNT_SWITCHES
-     * @default 2
+     * @default 10
      */
-    max_account_switches: z.number().min(0).max(50).default(2),
+    max_account_switches: z.number().min(0).max(500).default(10),
 
     /**
      * Allow falling back between quota pools (antigravity ↔ gemini-cli) when rate-limited.
@@ -416,16 +416,25 @@ export const AntigravityConfigSchema = z.object({
    request_jitter_max_ms: z.number().min(0).max(5000).default(0),
    
    /**
+    * Delay in milliseconds before switching to the next account after a rate limit.
+    * Lower values reduce total wait time when cycling through accounts.
+    * Higher values give the rate-limited account more time to recover.
+    *
+    * @default 500
+    */
+   switch_account_delay_ms: z.number().min(0).max(10000).default(500),
+
+   /**
     * Soft quota threshold percentage (1-100).
     * When an account's quota usage reaches this percentage, skip it during
     * account selection (same as if it were rate-limited).
     * 
-    * Example: 90 means skip account when 90% of quota is used (10% remaining).
+    * Example: 80 means skip account when 80% of quota is used (20% remaining).
     * Set to 100 to disable soft quota protection.
     * 
-    * @default 90
+    * @default 80
     */
-   soft_quota_threshold_percent: z.number().min(1).max(100).default(90),
+   soft_quota_threshold_percent: z.number().min(1).max(100).default(80),
    
    /**
     * How often to refresh quota data in the background (in minutes).
@@ -526,14 +535,15 @@ export const DEFAULT_CONFIG: AntigravityConfig = {
   account_selection_strategy: 'hybrid',
   pid_offset_enabled: false,
   switch_on_first_rate_limit: true,
-  max_account_switches: 2,
+  max_account_switches: 10,
   quota_style_fallback: false,
   scheduling_mode: 'cache_first',  max_cache_first_wait_seconds: 60,
   failure_ttl_seconds: 3600,
   default_retry_after_seconds: 60,
   max_backoff_seconds: 60,
   request_jitter_max_ms: 0,
-  soft_quota_threshold_percent: 90,
+  switch_account_delay_ms: 500,
+  soft_quota_threshold_percent: 80,
   quota_refresh_interval_minutes: 30,
   soft_quota_cache_ttl_minutes: "auto",
   proactive_rotation_threshold_percent: 20,

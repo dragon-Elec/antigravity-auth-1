@@ -1438,8 +1438,8 @@ function transformGeminiCandidate(candidate: any): any {
         text: thinkingText,
         thought: true,
       };
-      const sig = part.signature || part.thoughtSignature;
-      if (typeof sig === "string" && sig) transformed.signature = sig;
+      const sig = part.thoughtSignature || part.signature;
+      if (typeof sig === "string" && sig) transformed.thoughtSignature = sig;
       if (part.cache_control) transformed.cache_control = part.cache_control;
       return transformed;
     }
@@ -1454,8 +1454,8 @@ function transformGeminiCandidate(candidate: any): any {
         text: thinkingText,
         thought: true,
       };
-      const sig = part.signature || part.thoughtSignature;
-      if (typeof sig === "string" && sig) transformed.signature = sig;
+      const sig = part.thoughtSignature || part.signature;
+      if (typeof sig === "string" && sig) transformed.thoughtSignature = sig;
       if (part.cache_control) transformed.cache_control = part.cache_control;
       return transformed;
     }
@@ -1524,8 +1524,8 @@ export function transformThinkingParts(response: unknown): unknown {
           text: thinkingText,
           thought: true,
         };
-        const sig = (block as any).signature || (block as any).thoughtSignature;
-        if (typeof sig === "string" && sig) transformed.signature = sig;
+        const sig = (block as any).thoughtSignature || (block as any).signature;
+        if (typeof sig === "string" && sig) transformed.thoughtSignature = sig;
         if ((block as any).cache_control) transformed.cache_control = (block as any).cache_control;
 
         transformedContent.push(transformed);      } else {
@@ -2758,106 +2758,49 @@ export function applyToolPairingFixes(
 }
 
 // ============================================================================
-// SYNTHETIC CLAUDE SSE RESPONSE
-// Used to return error messages as "successful" responses to avoid locking
-// the OpenCode session when unrecoverable errors (like 400 Prompt Too Long) occur.
+// SYNTHETIC GEMINI SSE RESPONSE
+// Used to return error messages as successful Gemini stream responses to avoid
+// locking OpenCode sessions when unrecoverable loader errors occur.
 // ============================================================================
 
 /**
- * Creates a synthetic Claude SSE streaming response with error content.
- * 
- * When returning HTTP 400/500 errors to OpenCode, the session becomes locked
- * and the user cannot use /compact or other commands. This function creates
- * a fake "successful" SSE response (200 OK) with the error message as text content,
- * allowing the user to continue using the session.
- * 
- * @param errorMessage - The error message to include in the response
- * @param requestedModel - The model that was requested
- * @returns A Response object with synthetic SSE stream
+ * Creates a synthetic Gemini SSE streaming response with error content.
+ *
+ * The intercepted provider route is Google/Gemini, so the synthetic body must
+ * match OpenCode's Gemini protocol (`data: { candidates, usageMetadata }`).
+ * Returning Anthropic-style SSE here can make the downstream parser fail before
+ * it records a normal `step-finish`.
  */
 export function createSyntheticErrorResponse(
   errorMessage: string,
-  requestedModel: string = "unknown",
+  _requestedModel: string = "unknown",
 ): Response {
-  // Generate a unique message ID
-  const messageId = `msg_synthetic_${Date.now()}`;
-  
-  // Build Claude SSE events that represent a complete message with error text
-  const events: string[] = [];
-  
-  // 1. message_start event
-  events.push(`event: message_start
-data: ${JSON.stringify({
-    type: "message_start",
-    message: {
-      id: messageId,
-      type: "message",
-      role: "assistant",
-      content: [],
-      model: requestedModel,
-      stop_reason: null,
-      stop_sequence: null,
-      usage: { input_tokens: 0, output_tokens: 0 },
+  const outputTokens = Math.max(1, Math.ceil(errorMessage.length / 4));
+  const event = {
+    candidates: [
+      {
+        content: {
+          role: "model",
+          parts: [{ text: errorMessage }],
+        },
+        finishReason: "STOP",
+      },
+    ],
+    usageMetadata: {
+      promptTokenCount: 0,
+      candidatesTokenCount: outputTokens,
+      totalTokenCount: outputTokens,
     },
-  })}
+  };
 
-`);
-
-  // 2. content_block_start event
-  events.push(`event: content_block_start
-data: ${JSON.stringify({
-    type: "content_block_start",
-    index: 0,
-    content_block: { type: "text", text: "" },
-  })}
-
-`);
-
-  // 3. content_block_delta event with the error message
-  events.push(`event: content_block_delta
-data: ${JSON.stringify({
-    type: "content_block_delta",
-    index: 0,
-    delta: { type: "text_delta", text: errorMessage },
-  })}
-
-`);
-
-  // 4. content_block_stop event
-  events.push(`event: content_block_stop
-data: ${JSON.stringify({
-    type: "content_block_stop",
-    index: 0,
-  })}
-
-`);
-
-  // 5. message_delta event (end_turn)
-  events.push(`event: message_delta
-data: ${JSON.stringify({
-    type: "message_delta",
-    delta: { stop_reason: "end_turn", stop_sequence: null },
-    usage: { output_tokens: Math.ceil(errorMessage.length / 4) },
-  })}
-
-`);
-
-  // 6. message_stop event
-  events.push(`event: message_stop
-data: ${JSON.stringify({ type: "message_stop" })}
-
-`);
-
-  const body = events.join("");
-
-  return new Response(body, {
+  return new Response(`data: ${JSON.stringify(event)}\n\n`, {
     status: 200,
     headers: {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache",
       "Connection": "keep-alive",
       "X-Antigravity-Synthetic": "true",
-      "X-Antigravity-Error-Type": "prompt_too_long",
+      "X-Antigravity-Error-Type": "synthetic_error",
     },
   });
 }

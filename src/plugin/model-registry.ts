@@ -10,6 +10,7 @@ export interface ModelThinkingConfig {
 export interface ModelVariant {
   thinkingLevel?: ModelThinkingLevel
   thinkingConfig?: ModelThinkingConfig
+  disabled?: boolean
 }
 
 export interface ModelLimit {
@@ -86,7 +87,7 @@ function defineModel(
   }
 }
 
-const PUBLIC_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
+const ALL_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
   "antigravity-gemini-3.1-pro": defineModel("antigravity-gemini-3.1-pro", {
     name: "Gemini 3.1 Pro (Antigravity)",
     reasoning: true,
@@ -110,21 +111,21 @@ const PUBLIC_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
   "antigravity-claude-sonnet-4-6-thinking": defineModel("antigravity-claude-sonnet-4-6-thinking", {
     name: "Claude Sonnet 4.6 Thinking (Antigravity)",
     reasoning: true,
-    limit: { context: 200000, output: 64000 },
+    limit: { context: 250000, output: 64000 },
     modalities: DEFAULT_MODALITIES,
     variants: {
-      low: { thinkingConfig: { thinkingBudget: 8192 } },
-      max: { thinkingConfig: { thinkingBudget: 32768 } },
+      low: { disabled: true },
+      high: { disabled: true },
     },
   }),
   "antigravity-claude-opus-4-6-thinking": defineModel("antigravity-claude-opus-4-6-thinking", {
     name: "Claude Opus 4.6 Thinking (Antigravity)",
     reasoning: true,
-    limit: { context: 200000, output: 64000 },
+    limit: { context: 250000, output: 64000 },
     modalities: DEFAULT_MODALITIES,
     variants: {
-      low: { thinkingConfig: { thinkingBudget: 8192 } },
-      max: { thinkingConfig: { thinkingBudget: 32768 } },
+      low: { disabled: true },
+      high: { disabled: true },
     },
   }),
   "antigravity-gemini-3.1-flash-image": defineModel("antigravity-gemini-3.1-flash-image", {
@@ -213,17 +214,21 @@ const RESOLVER_ALIASES: Record<string, string> = {
   "gemini-claude-opus-4-6-thinking-low": "claude-opus-4-6-thinking",
   "gemini-claude-opus-4-6-thinking-medium": "claude-opus-4-6-thinking",
   "gemini-claude-opus-4-6-thinking-high": "claude-opus-4-6-thinking",
-  "gemini-claude-sonnet-4-6-thinking-low": "claude-sonnet-4-6-thinking",
-  "gemini-claude-sonnet-4-6-thinking-medium": "claude-sonnet-4-6-thinking",
-  "gemini-claude-sonnet-4-6-thinking-high": "claude-sonnet-4-6-thinking",
-  "gemini-claude-sonnet-4-6": "claude-sonnet-4-6-thinking",
+  "gemini-claude-sonnet-4-6-thinking-low": "claude-sonnet-4-6",
+  "gemini-claude-sonnet-4-6-thinking-medium": "claude-sonnet-4-6",
+  "gemini-claude-sonnet-4-6-thinking-high": "claude-sonnet-4-6",
+  "gemini-claude-sonnet-4-6": "claude-sonnet-4-6",
+  "claude-sonnet-4-6-thinking": "claude-sonnet-4-6",
+  "claude-sonnet-4-6-thinking-low": "claude-sonnet-4-6",
+  "claude-sonnet-4-6-thinking-medium": "claude-sonnet-4-6",
+  "claude-sonnet-4-6-thinking-high": "claude-sonnet-4-6",
 }
 
 const GEMINI_35_FLASH_ROUTES: Gemini35FlashRouteMetadata = {
   antigravity: {
     defaultModel: "gemini-3-flash-agent",
     byTier: {
-      low: "gemini-3.5-flash-low",
+      low: "gemini-3.5-flash-extra-low",
       medium: "gemini-3.5-flash-low",
       high: "gemini-3-flash-agent",
     },
@@ -243,16 +248,32 @@ const QUOTA_GROUP_BY_MODEL_ID: Record<string, ModelQuotaGroup> = {
   "gemini-3-flash": "gemini-flash",
   "gemini-3-flash-agent": "gemini-flash",
   "gemini-3.5-flash-low": "gemini-flash",
+  "gemini-3.5-flash-extra-low": "gemini-flash",
   "gemini-3.1-flash-image": "gemini-flash",
   "gpt-oss-120b": "gpt-oss",
   "gpt-oss-120b-medium": "gpt-oss",
 }
 
-export const OPENCODE_MODEL_DEFINITIONS = PUBLIC_MODEL_DEFINITIONS
+const ANTIGRAVITY_OPENCODE_MODEL_IDS = [
+  "antigravity-gemini-3.5-flash",
+  "antigravity-gemini-3.1-pro",
+  "antigravity-claude-sonnet-4-6-thinking",
+  "antigravity-claude-opus-4-6-thinking",
+] as const
+
+function pickModelDefinitions(ids: readonly string[]): OpencodeModelDefinitions {
+  return Object.fromEntries(ids.map((id) => [id, ALL_MODEL_DEFINITIONS[id]!]))
+}
+
+export const OPENCODE_MODEL_DEFINITIONS = pickModelDefinitions(ANTIGRAVITY_OPENCODE_MODEL_IDS)
 export const MODEL_ALIASES = RESOLVER_ALIASES
 
 export function getPublicModelDefinitions(): OpencodeModelDefinitions {
-  return PUBLIC_MODEL_DEFINITIONS
+  return OPENCODE_MODEL_DEFINITIONS
+}
+
+export function getAntigravityOpencodeModelIds(): string[] {
+  return [...ANTIGRAVITY_OPENCODE_MODEL_IDS]
 }
 
 export function getResolverAliasMap(): Record<string, string> {

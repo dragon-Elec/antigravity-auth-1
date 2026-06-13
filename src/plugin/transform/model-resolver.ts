@@ -129,6 +129,26 @@ function resolveGemini35FlashAntigravityModel(tier?: ThinkingTier): string {
   return getGemini35FlashAntigravityModel(tier);
 }
 
+function getAgyGemini35FlashThinkingBudget(tier?: ThinkingTier): number {
+  switch (tier) {
+    case "low":
+      return 1000;
+    case "high":
+      return 10000;
+    case "medium":
+    default:
+      return 4000;
+  }
+}
+
+function getAgyGemini31ProModel(tier?: ThinkingTier): string {
+  return tier === "high" ? "gemini-pro-agent" : "gemini-3.1-pro-low";
+}
+
+function getAgyGemini31ProThinkingBudget(tier?: ThinkingTier): number {
+  return tier === "high" ? 10001 : 1001;
+}
+
 /**
  * Resolves a model name with optional tier suffix and quota prefix to its actual API model name
  * and corresponding thinking configuration.
@@ -172,13 +192,25 @@ export function resolveModelWithTier(requestedModel: string, options: ModelResol
   // `gemini-3.5-flash-low`.
   const isGemini3Pro = isGemini3ProModel(modelWithoutQuota);
   const isGemini3Flash = isGemini3FlashModel(modelWithoutQuota);
+  const isGemini31Pro = /^gemini-3\.1-pro/i.test(baseName);
   const isGemini35Flash = /^gemini-3\.5-flash/i.test(baseName);
+
+  if (isGemini31Pro && quotaPreference === "antigravity") {
+    return {
+      actualModel: getAgyGemini31ProModel(tier),
+      thinkingBudget: getAgyGemini31ProThinkingBudget(tier),
+      tier,
+      isThinkingModel: true,
+      quotaPreference,
+      explicitQuota,
+    };
+  }
 
   if (isGemini35Flash && quotaPreference === "antigravity") {
     return {
-      actualModel: resolveGemini35FlashAntigravityModel(tier),
-      thinkingLevel: tier ?? "high",
-      tier,
+      actualModel: resolveGemini35FlashAntigravityModel(tier ?? "medium"),
+      thinkingBudget: getAgyGemini35FlashThinkingBudget(tier),
+      tier: tier ?? "medium",
       isThinkingModel: true,
       quotaPreference,
       explicitQuota,
@@ -215,7 +247,11 @@ export function resolveModelWithTier(requestedModel: string, options: ModelResol
 
   // Check if this is a Gemini 3 model (works for both aliased and skipAlias paths)
   const isEffectiveGemini3 = resolvedModel.toLowerCase().includes("gemini-3");
-  const isClaudeThinking = resolvedModel.toLowerCase().includes("claude") && resolvedModel.toLowerCase().includes("thinking");
+  const lowerModelWithoutQuota = modelWithoutQuota.toLowerCase();
+  const isClaudeThinking =
+    (resolvedModel.toLowerCase().includes("claude") && resolvedModel.toLowerCase().includes("thinking")) ||
+    (lowerModelWithoutQuota.includes("claude") && lowerModelWithoutQuota.includes("thinking")) ||
+    lowerModelWithoutQuota === "gemini-claude-sonnet-4-6";
 
   if (!tier) {
     // Gemini 3 models without explicit tier get a default thinkingLevel
@@ -228,13 +264,11 @@ export function resolveModelWithTier(requestedModel: string, options: ModelResol
         explicitQuota,
       };
     }
-    // Claude thinking models without explicit tier get medium budget (16384)
-    // Saves ~16K thinking tokens/request vs high (32768) with minimal quality impact.
-    // Users can override with :high suffix for complex reasoning tasks.
+    // agy CLI sends a compact 1024-token budget for Claude thinking models.
     if (isClaudeThinking) {
       return {
         actualModel: resolvedModel,
-        thinkingBudget: THINKING_TIER_BUDGETS.claude.medium,
+        thinkingBudget: 1024,
         isThinkingModel: true,
         quotaPreference,
         explicitQuota,
@@ -247,6 +281,17 @@ export function resolveModelWithTier(requestedModel: string, options: ModelResol
     return {
       actualModel: resolvedModel,
       thinkingLevel: tier,
+      tier,
+      isThinkingModel: true,
+      quotaPreference,
+      explicitQuota,
+    };
+  }
+
+  if (isClaudeThinking) {
+    return {
+      actualModel: resolvedModel,
+      thinkingBudget: 1024,
       tier,
       isThinkingModel: true,
       quotaPreference,
@@ -356,7 +401,7 @@ export function resolveModelForHeaderStyle(
       transformedModel = `${transformedModel}-preview`;
     }
 
-    const resolved = resolveModelWithTier(transformedModel);
+    const resolved = resolveModelWithTier(transformedModel, { cli_first: true });
     return {
       ...resolved,
       thinkingLevel: requestedTier ?? resolved.thinkingLevel,

@@ -168,7 +168,112 @@ export function deduplicateThinkingText(
   return response;
 }
 
-export function transformSseLine(
+type TransformSseLineResult = {
+  line: string;
+  hasToolCall: boolean;
+  hasFinishReason: boolean;
+};
+
+type PendingUsageLine = {
+  line: string;
+  suffix: string;
+};
+
+function extractUsageMetadataFromDataLine(line: string): Record<string, unknown> | undefined {
+  if (!line.startsWith("data:")) return undefined;
+  const json = line.slice(5).trim();
+  if (!json || json === "[DONE]") return undefined;
+
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    const response = parsed && typeof parsed === "object" && "response" in parsed
+      ? (parsed as { response?: unknown }).response
+      : parsed;
+    if (!response || typeof response !== "object") return undefined;
+    const usage = (response as { usageMetadata?: unknown }).usageMetadata;
+    return usage && typeof usage === "object" ? usage as Record<string, unknown> : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function usageMetadataHasCacheRead(usageMetadata: Record<string, unknown> | undefined): boolean {
+  return typeof usageMetadata?.cachedContentTokenCount === "number";
+}
+
+function completeSseEventSuffix(suffix: string): string {
+  if (suffix.includes("\n\n")) return suffix;
+  if (suffix.endsWith("\n")) return suffix + "\n";
+  return suffix + "\n\n";
+}
+
+function mergeUsageMetadataIntoDataLine(line: string, usageMetadata: Record<string, unknown> | undefined): string {
+  if (!usageMetadata || !line.startsWith("data:")) return line;
+  const json = line.slice(5).trim();
+  if (!json || json === "[DONE]") return line;
+
+  try {
+    const parsed = JSON.parse(json) as unknown;
+    const hasResponseWrapper = !!parsed && typeof parsed === "object" && "response" in parsed;
+    const response = hasResponseWrapper
+      ? (parsed as { response?: unknown }).response
+      : parsed;
+    if (!response || typeof response !== "object") return line;
+
+    const mutableResponse = response as Record<string, unknown>;
+    const existing = mutableResponse.usageMetadata && typeof mutableResponse.usageMetadata === "object"
+      ? mutableResponse.usageMetadata as Record<string, unknown>
+      : {};
+    mutableResponse.usageMetadata = { ...existing, ...usageMetadata };
+
+    return `data: ${JSON.stringify(parsed)}`;
+  } catch {
+    return line;
+  }
+}
+
+function responseHasToolCall(response: unknown): boolean {
+  if (!response || typeof response !== "object") return false;
+  const resp = response as Record<string, unknown>;
+
+  if (Array.isArray(resp.candidates)) {
+    return resp.candidates.some((candidate) => {
+      const cand = candidate as Record<string, unknown> | null;
+      const content = cand?.content as Record<string, unknown> | undefined;
+      const parts = content?.parts;
+      return Array.isArray(parts) && parts.some((part) => {
+        const p = part as Record<string, unknown> | null;
+        return Boolean(p?.functionCall) || p?.type === "tool_use";
+      });
+    });
+  }
+
+  if (Array.isArray(resp.content)) {
+    return resp.content.some((block) => {
+      const b = block as Record<string, unknown> | null;
+      return Boolean(b?.functionCall) || b?.type === "tool_use";
+    });
+  }
+
+  return false;
+}
+
+function responseHasFinishReason(response: unknown): boolean {
+  if (!response || typeof response !== "object") return false;
+  const resp = response as Record<string, unknown>;
+
+  if (Array.isArray(resp.candidates)) {
+    return resp.candidates.some((candidate) => {
+      const cand = candidate as Record<string, unknown> | null;
+      return typeof cand?.finishReason === "string" && cand.finishReason.length > 0;
+    });
+  }
+
+  const stopReason = resp.stopReason ?? resp.stop_reason;
+  return typeof stopReason === "string" && stopReason.length > 0;
+}
+
+function transformSseLineWithMetadata(
   line: string,
   signatureStore: SignatureStore,
   thoughtBuffer: ThoughtBuffer,
@@ -177,18 +282,21 @@ export function transformSseLine(
   options: StreamingOptions,
   debugState: { injected: boolean },
   usageState?: { lastUsage: StreamingUsageMetadata | null },
-): string {
+): TransformSseLineResult {
   if (!line.startsWith('data:')) {
-    return line;
+    return { line, hasToolCall: false, hasFinishReason: false };
   }
   const json = line.slice(5).trim();
   if (!json) {
-    return line;
+    return { line, hasToolCall: false, hasFinishReason: false };
   }
 
   try {
     const parsed = JSON.parse(json) as { response?: unknown };
     if (parsed.response !== undefined) {
+      const hasToolCall = responseHasToolCall(parsed.response);
+      const hasFinishReason = responseHasFinishReason(parsed.response);
+
       if (options.cacheSignatures && options.signatureSessionKey) {
         cacheThinkingSignaturesFromResponse(
           parsed.response,
@@ -228,13 +336,37 @@ export function transformSseLine(
       const transformed = callbacks.transformThinkingParts
         ? callbacks.transformThinkingParts(response)
         : response;
-      return `data: ${JSON.stringify(transformed)}`;
+      return { line: `data: ${JSON.stringify(transformed)}`, hasToolCall, hasFinishReason };
     }
   } catch (_) {
     console.warn("[antigravity] Malformed SSE chunk in streaming transform, passing through untransformed:", json.slice(0, 200));
   }
-  return line;
-}export function cacheThinkingSignaturesFromResponse(
+  return { line, hasToolCall: false, hasFinishReason: false };
+}
+
+export function transformSseLine(
+  line: string,
+  signatureStore: SignatureStore,
+  thoughtBuffer: ThoughtBuffer,
+  sentThinkingBuffer: ThoughtBuffer,
+  callbacks: StreamingCallbacks,
+  options: StreamingOptions,
+  debugState: { injected: boolean },
+  usageState?: { lastUsage: StreamingUsageMetadata | null },
+): string {
+  return transformSseLineWithMetadata(
+    line,
+    signatureStore,
+    thoughtBuffer,
+    sentThinkingBuffer,
+    callbacks,
+    options,
+    debugState,
+    usageState,
+  ).line;
+}
+
+export function cacheThinkingSignaturesFromResponse(
   response: unknown,
   signatureSessionKey: string,
   signatureStore: SignatureStore,
@@ -310,70 +442,131 @@ export function createStreamingTransformer(
   const sentThinkingBuffer = createThoughtBuffer();
   const debugState = { injected: false };
   let hasSeenUsageMetadata = false;
+  let terminatedAfterFinishReason = false;
+  const pendingUsageLines: PendingUsageLine[] = [];
   const usageState: { lastUsage: StreamingUsageMetadata | null } = { lastUsage: null };
+
+  const emitSyntheticUsageIfMissing = (controller: TransformStreamDefaultController<Uint8Array>) => {
+    if (hasSeenUsageMetadata) return;
+    const syntheticUsage = {
+      response: {
+        usageMetadata: {
+          promptTokenCount: 0,
+          candidatesTokenCount: 0,
+          totalTokenCount: 0,
+        }
+      }
+    };
+    controller.enqueue(encoder.encode(`\ndata: ${JSON.stringify(syntheticUsage)}\n\n`));
+    hasSeenUsageMetadata = true;
+  };
+
+  const emitUsageCallback = () => {
+    if (usageState.lastUsage && callbacks.onUsageMetadata) {
+      callbacks.onUsageMetadata(usageState.lastUsage);
+    }
+  };
+
+  const emitPendingUsageLines = (
+    controller: TransformStreamDefaultController<Uint8Array>,
+    finalUsage?: Record<string, unknown>,
+  ) => {
+    while (pendingUsageLines.length > 0) {
+      const pending = pendingUsageLines.shift();
+      if (!pending) continue;
+      const line = mergeUsageMetadataIntoDataLine(pending.line, finalUsage);
+      controller.enqueue(encoder.encode(line + pending.suffix));
+    }
+  };
+
+  const processLine = (
+    line: string,
+    controller: TransformStreamDefaultController<Uint8Array>,
+    suffix: string,
+  ): boolean => {
+    if (pendingUsageLines.length > 0 && line.trim() === "") {
+      const lastPending = pendingUsageLines[pendingUsageLines.length - 1];
+      if (lastPending) lastPending.suffix += suffix;
+      return false;
+    }
+
+    if (line.includes('usageMetadata')) {
+      hasSeenUsageMetadata = true;
+    }
+
+    const result = transformSseLineWithMetadata(
+      line,
+      signatureStore,
+      thoughtBuffer,
+      sentThinkingBuffer,
+      callbacks,
+      options,
+      debugState,
+      usageState,
+    );
+
+    if (!result.hasFinishReason && pendingUsageLines.length > 0) {
+      emitPendingUsageLines(controller);
+    }
+
+    const lineUsage = extractUsageMetadataFromDataLine(result.line);
+    if (!result.hasFinishReason && lineUsage && !usageMetadataHasCacheRead(lineUsage)) {
+      // Gemini often reports partial usage on the content/functionCall event,
+      // then reports cachedContentTokenCount only on the terminal STOP event.
+      // Some OpenCode/AI SDK paths attach step usage from the latest content
+      // event they saw before halt, so keep a one-line delay and merge the
+      // terminal cache usage when it arrives.
+      pendingUsageLines.push({ line: result.line, suffix });
+      return false;
+    }
+
+    if (result.hasFinishReason) {
+      const finalUsage = lineUsage;
+      emitPendingUsageLines(controller, finalUsage);
+      controller.enqueue(encoder.encode(result.line + completeSseEventSuffix(suffix)));
+      // Antigravity can leave the HTTP response open after a terminal candidate event.
+      // Forward a complete SSE frame before closing; downstream parsers only dispatch
+      // the terminal STOP event after the blank event separator is seen.
+      // OpenCode only records step-finish and exits/continues after the provider stream closes,
+      // so terminate once the finished event has been forwarded.
+      emitSyntheticUsageIfMissing(controller);
+      emitUsageCallback();
+      terminatedAfterFinishReason = true;
+      controller.terminate();
+      return true;
+    }
+
+    emitPendingUsageLines(controller);
+    controller.enqueue(encoder.encode(result.line + suffix));
+    return false;
+  };
 
   return new TransformStream({
     transform(chunk, controller) {
+      if (terminatedAfterFinishReason) return;
       buffer += decoder.decode(chunk, { stream: true });
 
       const lines = buffer.split('\n');
       buffer = lines.pop() || '';
 
       for (const line of lines) {
-        if (line.includes('usageMetadata')) {
-          hasSeenUsageMetadata = true;
+        if (processLine(line, controller, '\n')) {
+          return;
         }
-
-        const transformedLine = transformSseLine(
-          line,
-          signatureStore,
-          thoughtBuffer,
-          sentThinkingBuffer,
-          callbacks,
-          options,
-          debugState,
-          usageState,
-        );
-        controller.enqueue(encoder.encode(transformedLine + '\n'));
       }
     },
     flush(controller) {
+      if (terminatedAfterFinishReason) return;
       buffer += decoder.decode();
 
-      if (buffer) {
-        if (buffer.includes('usageMetadata')) {
-          hasSeenUsageMetadata = true;
-        }
-        const transformedLine = transformSseLine(
-          buffer,
-          signatureStore,
-          thoughtBuffer,
-          sentThinkingBuffer,
-          callbacks,
-          options,
-          debugState,
-          usageState,
-        );
-        controller.enqueue(encoder.encode(transformedLine));
+      if (buffer && processLine(buffer, controller, '')) {
+        return;
       }
 
+      emitPendingUsageLines(controller);
       // Inject synthetic usage metadata if missing (fixes "Context % used: 0%" issue)
-      if (!hasSeenUsageMetadata) {
-        const syntheticUsage = {
-          response: {
-            usageMetadata: {
-              promptTokenCount: 0,
-              candidatesTokenCount: 0,
-              totalTokenCount: 0,
-            }
-          }
-        };
-        controller.enqueue(encoder.encode(`\ndata: ${JSON.stringify(syntheticUsage)}\n\n`));
-      }
-
-      if (usageState.lastUsage && callbacks.onUsageMetadata) {
-        callbacks.onUsageMetadata(usageState.lastUsage);
-      }
+      emitSyntheticUsageIfMissing(controller);
+      emitUsageCallback();
     },
   });
 }

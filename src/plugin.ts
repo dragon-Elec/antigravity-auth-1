@@ -1,18 +1,20 @@
 import { exec } from "node:child_process";
+import crypto from "node:crypto";
 import { tool } from "@opencode-ai/plugin";
 import {
   ANTIGRAVITY_DEFAULT_PROJECT_ID,
   ANTIGRAVITY_ENDPOINT_FALLBACKS,
   ANTIGRAVITY_ENDPOINT_PROD,
   ANTIGRAVITY_PROVIDER_ID,
-  getAntigravityHeaders,
   type HeaderStyle,
 } from "./constants";
 import { authorizeAntigravity, exchangeAntigravity } from "./antigravity/oauth";
 import type { AntigravityTokenExchangeResult } from "./antigravity/oauth";
 import { accessTokenExpired, isOAuthAuth, parseRefreshParts, formatRefreshParts } from "./plugin/auth";
 import { promptAddAnotherAccount, promptLoginMode, promptProjectId } from "./plugin/cli";
-import { ensureProjectContext } from "./plugin/project";
+import { fetchWithAgyCliTransport } from "./plugin/agy-transport";
+import { buildFingerprintHeaders, getSessionFingerprint } from "./plugin/fingerprint";
+import { clearProvisionFailedKeys, ensureProjectContext } from "./plugin/project";
 import {
   startAntigravityDebugRequest, 
   logAntigravityDebugResponse,
@@ -31,12 +33,12 @@ import {
   isGenerativeLanguageRequest,
   prepareAntigravityRequest,
   transformAntigravityResponse,
-} from "./plugin/request";import { resolveModelWithTier } from "./plugin/transform/model-resolver";
+} from "./plugin/request";
+import { resolveModelWithTier } from "./plugin/transform/model-resolver";
 import {
   isEmptyResponseBody,
   createSyntheticErrorResponse,
 } from "./plugin/request-helpers";
-import { EmptyResponseError } from "./plugin/errors";
 import { AntigravityTokenRefreshError, refreshAccessToken } from "./plugin/token";
 import { startOAuthListener, type OAuthListener } from "./plugin/server";
 import { clearAccounts, loadAccounts, saveAccounts, saveAccountsReplace } from "./plugin/storage";
@@ -48,11 +50,22 @@ import { loadConfig, initRuntimeConfig, type AntigravityConfig } from "./plugin/
 import { createSessionRecoveryHook, getRecoverySuccessToast } from "./plugin/recovery";
 import { checkAccountsQuota } from "./plugin/quota";
 import { formatCachedQuotaWithStatus, classifyGroupStatus, formatQuotaStatusBadge } from "./plugin/ui/quota-status";
-import { initDiskSignatureCache } from "./plugin/cache";import { createProactiveRefreshQueue, type ProactiveRefreshQueue } from "./plugin/refresh-queue";
+import { initDiskSignatureCache } from "./plugin/cache";
+import { createProactiveRefreshQueue, type ProactiveRefreshQueue } from "./plugin/refresh-queue";
 import { initLogger, createLogger } from "./plugin/logger";
 import { initHealthTracker, getHealthTracker, initTokenTracker, getTokenTracker } from "./plugin/rotation";
 import { getAntigravityVersionResolution, initAntigravityVersion } from "./plugin/version";
 import { executeSearch } from "./plugin/search";
+import { resolvePromptContext } from "./plugin/prompt-context";
+import {
+  dumpGeminiRequest,
+  executeGeminiDumpCommand,
+  GEMINI_DUMP_COMMAND_NAME,
+  noteGeminiDumpResponse,
+  parseGeminiDumpCommandAction,
+  setGeminiDumpEnabled,
+} from "./plugin/gemini-dump";
+import { getAntigravityOpencodeModelIds, OPENCODE_MODEL_DEFINITIONS } from "./plugin/model-registry";
 import type {
   GetAuth,
   LoaderResult,
@@ -66,7 +79,12 @@ import type {
 const MAX_OAUTH_ACCOUNTS = 10;
 const MAX_WARMUP_SESSIONS = 1000;
 const MAX_WARMUP_RETRIES = 2;
+const MAX_TOTAL_CAPACITY_RETRIES = 4;
 const CAPACITY_BACKOFF_TIERS_MS = [5000, 10000, 20000, 30000, 60000];
+
+function isCapacityRetryBudgetExhausted(totalCapacityRetries: number): boolean {
+  return totalCapacityRetries >= MAX_TOTAL_CAPACITY_RETRIES;
+}
 
 function getCapacityBackoffDelay(consecutiveFailures: number): number {
   const index = Math.min(consecutiveFailures, CAPACITY_BACKOFF_TIERS_MS.length - 1);
@@ -484,22 +502,25 @@ async function verifyAccountAccess(
     account.projectId ??
     ANTIGRAVITY_DEFAULT_PROJECT_ID;
 
+  const fingerprintHeaders = buildFingerprintHeaders(getSessionFingerprint());
   const headers: Record<string, string> = {
-    ...getAntigravityHeaders(),
+    "User-Agent": fingerprintHeaders["User-Agent"] ?? getSessionFingerprint().userAgent,
     Authorization: `Bearer ${refreshedAuth.access}`,
     "Content-Type": "application/json",
+    "Accept-Encoding": "gzip",
   };
-  if (projectId) {
-    headers["x-goog-user-project"] = projectId;
-  }
 
   const requestBody = {
-    model: "gemini-3-flash",
+    project: projectId,
+    requestId: `agent/${crypto.randomUUID()}/${Date.now()}/${crypto.randomUUID()}/2`,
     request: {
       model: "gemini-3-flash",
       contents: [{ role: "user", parts: [{ text: "ping" }] }],
       generationConfig: { maxOutputTokens: 1, temperature: 0 },
     },
+    model: "gemini-3-flash",
+    userAgent: "antigravity",
+    requestType: "agent",
   };
 
   const controller = new AbortController();
@@ -507,12 +528,11 @@ async function verifyAccountAccess(
 
   let response: Response;
   try {
-    response = await fetch(`${ANTIGRAVITY_ENDPOINT_PROD}/v1internal:streamGenerateContent?alt=sse`, {
+    response = await fetchWithAgyCliTransport(`${ANTIGRAVITY_ENDPOINT_PROD}/v1internal:streamGenerateContent?alt=sse`, {
       method: "POST",
       headers,
       body: JSON.stringify(requestBody),
-      signal: controller.signal,
-    });
+    }, { signal: controller.signal });
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
       return { status: "error", message: "Verification check timed out." };
@@ -1063,7 +1083,6 @@ function formatWaitTime(ms: number): string {
 
 // Progressive rate limit retry delays
 const FIRST_RETRY_DELAY_MS = 1000;      // 1s - first 429 quick retry on same account
-const SWITCH_ACCOUNT_DELAY_MS = 5000;   // 5s - delay before switching to another account
 
 /**
  * Rate limit state tracking with time-window deduplication.
@@ -1193,6 +1212,46 @@ function resetAccountFailureState(accountIndex: number): void {
 /**
  * Sleep for a given number of milliseconds, respecting an abort signal.
  */
+const HANDLED_COMMAND_SENTINEL = "ANTIGRAVITY_COMMAND_HANDLED";
+
+async function sendIgnoredMessage(
+  client: PluginClient,
+  sessionID: string,
+  text: string,
+): Promise<void> {
+  const session = client.session as {
+    promptAsync?: (input: unknown) => Promise<unknown>;
+    prompt?: (input: unknown) => Promise<unknown> | unknown;
+  } | undefined;
+  const promptContext = await resolvePromptContext(client, sessionID);
+  const request = {
+    path: { id: sessionID },
+    body: {
+      noReply: true,
+      parts: [{ type: "text", text, ignored: true }],
+      ...(promptContext?.agent ? { agent: promptContext.agent } : {}),
+      ...(promptContext?.model ? { model: promptContext.model } : {}),
+      ...(promptContext?.variant ? { variant: promptContext.variant } : {}),
+    },
+  };
+
+  if (typeof session?.promptAsync === "function") {
+    await session.promptAsync(request);
+    return;
+  }
+
+  if (typeof session?.prompt === "function") {
+    await Promise.resolve(session.prompt(request));
+    return;
+  }
+
+  throw new Error("OpenCode session prompt API is unavailable for ignored replies.");
+}
+
+function throwHandledCommandSentinel(): never {
+  throw new Error(HANDLED_COMMAND_SENTINEL);
+}
+
 function sleep(ms: number, signal?: AbortSignal | null): Promise<void> {
   return new Promise((resolve, reject) => {
     if (signal?.aborted) {
@@ -1404,6 +1463,34 @@ export const createAntigravityPlugin = (providerId: string) => async (
   });
 
   return {
+    config: async (opencodeConfig: Record<string, unknown>) => {
+      applyAntigravityProviderCatalog(opencodeConfig, providerId);
+      const mutableConfig = opencodeConfig as Record<string, unknown> & {
+        command?: Record<string, unknown>;
+      };
+      mutableConfig.command = {
+        ...(mutableConfig.command ?? {}),
+        [GEMINI_DUMP_COMMAND_NAME]: {
+          template: GEMINI_DUMP_COMMAND_NAME,
+          description: "Show or toggle Gemini/Antigravity wire dump capture for debugging.",
+        },
+      };
+    },
+    "command.execute.before": async (input: { command: string; arguments: string; sessionID: string }) => {
+      if (input.command !== GEMINI_DUMP_COMMAND_NAME) return;
+
+      const action = parseGeminiDumpCommandAction(input.arguments);
+      if (action.type === "enable" || action.type === "disable") {
+        setGeminiDumpEnabled(action.type === "enable");
+      }
+
+      await sendIgnoredMessage(
+        client,
+        input.sessionID,
+        executeGeminiDumpCommand({ argumentsText: input.arguments }),
+      );
+      throwHandledCommandSentinel();
+    },
     event: eventHandler,
     tool: {
       google_search: googleSearchTool,
@@ -1515,7 +1602,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
           }
 
           if (accountManager.getAccountCount() === 0) {
-            throw new Error("No Antigravity accounts configured. Run `opencode auth login`.");
+            return createSyntheticErrorResponse(
+              "No Antigravity accounts configured. Run `opencode auth login`.",
+              "unknown",
+            );
           }
 
           const urlString = toUrlString(input);
@@ -1544,6 +1634,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
             toolDebugMissing?: number;
             toolDebugSummary?: string;
             toolDebugPayload?: string;
+            dumpContext?: ReturnType<typeof dumpGeminiRequest>;
           };
 
           let lastFailure: FailureContext | null = null;
@@ -1615,7 +1706,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
             } = routingDecision;
             
             if (accountCount === 0) {
-              throw new Error("No Antigravity accounts available. Run `opencode auth login`.");
+              return createSyntheticErrorResponse(
+                "No Antigravity accounts available. Run `opencode auth login`.",
+                model ?? "unknown",
+              );
             }
 
             const softQuotaCacheTtlMs = computeSoftQuotaCacheTtlMs(
@@ -1664,10 +1758,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     `All accounts over ${threshold}% quota threshold. Resets in ${waitTimeFormatted}.`,
                     "error"
                   );
-                  throw new Error(
+                  return createSyntheticErrorResponse(
                     `Quota protection: All ${accountCount} account(s) are over ${threshold}% usage for ${family}. ` +
                     `Quota resets in ${waitTimeFormatted}. ` +
-                    `Add more accounts, wait for quota reset, or set soft_quota_threshold_percent: 100 to disable.`
+                    `Add more accounts, wait for quota reset, or set soft_quota_threshold_percent: 100 to disable.`,
+                    model ?? "unknown",
                   );
                 }
                 
@@ -1714,10 +1809,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 );
                 
                 // Return a proper rate limit error response
-                throw new Error(
+                return createSyntheticErrorResponse(
                   `All ${accountCount} account(s) rate-limited for ${family}. ` +
                   `Quota resets in ${waitTimeFormatted}. ` +
-                  `Add more accounts with \`opencode auth login\` or wait and retry.`
+                  `Add more accounts with \`opencode auth login\` or wait and retry.`,
+                  model ?? "unknown",
                 );
               }
 
@@ -1815,8 +1911,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       log.error("Failed to clear stored Antigravity OAuth credentials", { error: String(storeError) });
                     }
 
-                    throw new Error(
+                    return createSyntheticErrorResponse(
                       "All Antigravity accounts have invalid refresh tokens. Run `opencode auth login` and reauthenticate.",
+                      model ?? "unknown",
                     );
                   }
 
@@ -1840,7 +1937,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
             if (!accessToken) {
               lastError = new Error("Missing access token");
               if (accountCount <= 1) {
-                throw lastError;
+                return createSyntheticErrorResponse(
+                  "Missing access token. Run `opencode auth login` to reauthenticate.",
+                  model ?? "unknown",
+                );
               }
               continue;
             }
@@ -1917,7 +2017,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
               try {
                 pushDebug("thinking-warmup: start");
-                const warmupResponse = await fetch(warmupUrl, warmupInit);
+                const warmupResponse = prepared.headerStyle === "antigravity"
+                  ? await fetchWithAgyCliTransport(warmupUrl, warmupInit, { signal: abortSignal, onDebug: pushDebug })
+                  : await fetch(warmupUrl, warmupInit);
                 const transformed = await transformAntigravityResponse(
                   warmupResponse,
                   true,
@@ -1957,11 +2059,14 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 // produces a different hash → cache MISS on the first real request.
                 // The probe aborts after the first SSE chunk, so output generation
                 // cost is negligible regardless of maxOutputTokens settings.
-                const probeResponse = await fetch(toUrlString(prepared.request), {
+                const probeInit = {
                   ...prepared.init,
                   method: "POST",
                   body: bodyStr,
-                });
+                };
+                const probeResponse = prepared.headerStyle === "antigravity"
+                  ? await fetchWithAgyCliTransport(toUrlString(prepared.request), probeInit, { signal: abortSignal, onDebug: pushDebug })
+                  : await fetch(toUrlString(prepared.request), probeInit);
 
                 if (probeResponse.body) {
                   const reader = probeResponse.body.getReader();
@@ -2057,6 +2162,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
               }
             }
             
+            // Bound transient capacity retries across all while-loop iterations. Without
+            // this total guard, per-endpoint capacityRetryCount can reset after the
+            // endpoint loop restarts and keep OpenCode waiting before any step-start.
+            let totalCapacityRetries = 0;
+            
             while (!shouldSwitchAccount) {
             
             // Flag to force thinking recovery on retry after API error
@@ -2113,6 +2223,18 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   streaming: prepared.streaming,
                   projectId: projectContext.effectiveProjectId,
                 });
+                const dumpContext = dumpGeminiRequest({
+                  originalUrl,
+                  resolvedUrl,
+                  method: prepared.init.method,
+                  headers: prepared.init.headers,
+                  body: prepared.init.body,
+                  streaming: prepared.streaming,
+                  requestedModel: prepared.requestedModel,
+                  effectiveModel: prepared.effectiveModel,
+                  sessionId: prepared.sessionId,
+                  projectId: projectContext.effectiveProjectId,
+                });
 
                 const createFailureContext = (failureResponse: Response): FailureContext => ({
                   response: failureResponse,
@@ -2126,6 +2248,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   toolDebugMissing: prepared.toolDebugMissing,
                   toolDebugSummary: prepared.toolDebugSummary,
                   toolDebugPayload: prepared.toolDebugPayload,
+                  dumpContext,
                 });
 
                 await runThinkingWarmup(prepared, projectContext.effectiveProjectId);
@@ -2145,7 +2268,10 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   tokenConsumed = getTokenTracker().consume(account.index);
                 }
 
-                const response = await fetch(prepared.request, prepared.init);
+                pushDebug(`dispatching request via ${prepared.headerStyle} transport`);
+                const response = prepared.headerStyle === "antigravity"
+                  ? await fetchWithAgyCliTransport(toUrlString(prepared.request), prepared.init, { signal: abortSignal, onDebug: pushDebug })
+                  : await fetch(prepared.request, prepared.init);
                 apiRequestCount++;
                 accountManager.recordRequest(account.index, family)
                 const requestCounts = accountManager.getDailyRequestCounts(account.index)
@@ -2153,6 +2279,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   pushDebug(`[Quota] account=${account.index} ${family}_today=${requestCounts[family]} total_${family}_today=${accountManager.getTotalDailyRequests(family)}`)
                 }
                 pushDebug(`status=${response.status} ${response.statusText} (api_request #${apiRequestCount})`);
+                noteGeminiDumpResponse(dumpContext, response);
 
                 // Handle 429 rate limit (or Service Overloaded) with improved logic
                 if (response.status === 429 || response.status === 503 || response.status === 529) {
@@ -2175,6 +2302,14 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   // Goal: Wait and Retry SAME Account. DO NOT LOCK.
                   // We handle this FIRST to avoid calling getRateLimitBackoff() and polluting the global rate limit state for transient errors.
                   if (rateLimitReason === "MODEL_CAPACITY_EXHAUSTED" || rateLimitReason === "SERVER_ERROR") {
+                     totalCapacityRetries++;
+                     if (isCapacityRetryBudgetExhausted(totalCapacityRetries)) {
+                       pushDebug(`Total capacity retries (${MAX_TOTAL_CAPACITY_RETRIES}) exhausted, switching account`);
+                       lastFailure = createFailureContext(response);
+                       shouldSwitchAccount = true;
+                       break;
+                     }
+
                      // Exponential backoff with jitter for capacity errors: 1s → 2s → 4s → 8s (max)
                      // Matches Antigravity-Manager's ExponentialBackoff(1s, 8s)
                      const baseDelayMs = 1000;
@@ -2185,7 +2320,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                      const waitMs = Math.round(jitter);
                      const waitSec = Math.round(waitMs / 1000);
                      
-                     pushDebug(`Server busy (${rateLimitReason}) on account ${account.index}, exponential backoff ${waitMs}ms (attempt ${capacityRetryCount + 1})`);
+                     pushDebug(`Server busy (${rateLimitReason}) on account ${account.index}, exponential backoff ${waitMs}ms (attempt ${capacityRetryCount + 1}, total ${totalCapacityRetries}/${MAX_TOTAL_CAPACITY_RETRIES})`);
 
                      await showToast(
                        `⏳ Server busy (${response.status}). Retrying in ${waitSec}s...`,
@@ -2287,14 +2422,16 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                   accountManager.requestSaveToDisk();
 
+                  const switchAccountDelayMs = config.switch_account_delay_ms ?? 500;
+
                   // For Gemini, preserve preferred quota across accounts before fallback
                   if (family === "gemini") {
                     if (headerStyle === "antigravity") {
                       // Check if any other account has Antigravity quota for this model
                       if (hasOtherAccountWithAntigravity(account)) {
                         pushDebug(`antigravity exhausted on account ${account.index}, but available on others. Switching account.`);
-                        await showToast(`Rate limited again. Switching account in 5s...`, "warning");
-                        await sleep(SWITCH_ACCOUNT_DELAY_MS, abortSignal);
+                        await showToast(`Rate limited again. Switching account in ${formatWaitTime(switchAccountDelayMs)}...`, "warning");
+                        await sleep(switchAccountDelayMs, abortSignal);
                         shouldSwitchAccount = true;
                         break;
                       }
@@ -2347,8 +2484,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     const quotaMsg = bodyInfo.quotaResetTime 
                       ? ` (quota resets ${bodyInfo.quotaResetTime})`
                       : ``;
-                    await showToast(`Rate limited again. Switching account in 5s...${quotaMsg}`, "warning");
-                    await sleep(SWITCH_ACCOUNT_DELAY_MS, abortSignal);
+                    await showToast(`Rate limited again. Switching account in ${formatWaitTime(switchAccountDelayMs)}...${quotaMsg}`, "warning");
+                    await sleep(switchAccountDelayMs, abortSignal);
                   } else {
                     // Single account: exponential backoff (1s, 2s, 4s, 8s... max 60s)
                     const expBackoffMs = Math.min(FIRST_RETRY_DELAY_MS * Math.pow(2, attempt - 1), 60000);
@@ -2498,12 +2635,11 @@ export const createAntigravityPlugin = (providerId: string) => async (
                       continue; // Retry the endpoint loop
                     }
                     
-                    // Clean up and throw after max attempts
+                    // Clean up and return a synthetic response after max attempts
                     emptyResponseAttempts.delete(emptyAttemptKey);
-                    throw new EmptyResponseError(
-                      "antigravity",
+                    return createSyntheticErrorResponse(
+                      `Empty response after ${currentAttempts} attempts for model ${prepared.effectiveModel ?? "unknown"}.`,
                       prepared.effectiveModel ?? "unknown",
-                      currentAttempts,
                     );
                   }
                   
@@ -2525,6 +2661,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   prepared.toolDebugSummary,
                   prepared.toolDebugPayload,
                   debugLines,
+                  dumpContext,
                 );
 
                 // Check for context errors and show appropriate toast
@@ -2649,9 +2786,13 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     lastFailure.toolDebugSummary,
                     lastFailure.toolDebugPayload,
                     debugLines,
+                    lastFailure.dumpContext,
                   );
                 }
-                throw lastError || new Error(`Exceeded max account switches (${maxAccountSwitches}). All accounts rate-limited.`);
+                return createSyntheticErrorResponse(
+                  lastError?.message || `Exceeded max account switches (${maxAccountSwitches}). All accounts rate-limited.`,
+                  model ?? "unknown",
+                );
               }
               
               // Avoid tight retry loops when there's only one account.
@@ -2669,10 +2810,14 @@ export const createAntigravityPlugin = (providerId: string) => async (
                     lastFailure.toolDebugSummary,
                     lastFailure.toolDebugPayload,
                     debugLines,
+                    lastFailure.dumpContext,
                   );
                 }
 
-                throw lastError || new Error("All Antigravity endpoints failed");
+                return createSyntheticErrorResponse(
+                  lastError?.message || "All Antigravity endpoints failed",
+                  model ?? "unknown",
+                );
               }
 
               continue;
@@ -2693,10 +2838,14 @@ export const createAntigravityPlugin = (providerId: string) => async (
                 lastFailure.toolDebugSummary,
                 lastFailure.toolDebugPayload,
                 debugLines,
+                lastFailure.dumpContext,
               );
             }
 
-            throw lastError || new Error("All Antigravity accounts failed");
+            return createSyntheticErrorResponse(
+              lastError?.message || "All Antigravity accounts failed",
+              model ?? "unknown",
+            );
           }
         },
       };
@@ -2765,6 +2914,16 @@ export const createAntigravityPlugin = (providerId: string) => async (
                   const displayQuota = quotaIsStale ? undefined : acc.cachedQuota;
                   const displayPerModelQuota = quotaIsStale ? undefined : acc.cachedPerModelQuota;
 
+                  if (status === 'active' && displayQuota) {
+                    const groups = Object.values(displayQuota);
+                    const allExhausted = groups.length > 0 && groups.every(
+                      (group) => typeof group.remainingFraction === "number" && group.remainingFraction <= 0,
+                    );
+                    if (allExhausted) {
+                      status = 'rate-limited';
+                    }
+                  }
+
                   return {
                     email: acc.email,
                     index: idx,
@@ -2785,6 +2944,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
                 if (menuResult.mode === "check") {
                   console.log("\n📊 Checking quotas for all accounts...\n");
+                  clearProvisionFailedKeys();
                   const results = await checkAccountsQuota(existingStorage.accounts, client, providerId);
                   let storageUpdated = false;
                   
@@ -3658,6 +3818,26 @@ function resolveHeaderRoutingDecision(
   };
 }
 
+type OpencodeMutableConfig = Record<string, unknown> & {
+  provider?: Record<string, Record<string, unknown> & {
+    models?: Record<string, unknown>;
+    whitelist?: string[];
+  }>;
+};
+
+function applyAntigravityProviderCatalog(config: Record<string, unknown>, providerId: string): void {
+  const mutableConfig = config as OpencodeMutableConfig;
+  mutableConfig.provider ??= {};
+
+  const providerConfig = mutableConfig.provider[providerId] ?? {};
+  providerConfig.models = {
+    ...(providerConfig.models ?? {}),
+    ...OPENCODE_MODEL_DEFINITIONS,
+  };
+  providerConfig.whitelist = getAntigravityOpencodeModelIds();
+  mutableConfig.provider[providerId] = providerConfig;
+}
+
 function getCliFirst(config: AntigravityConfig): boolean {
   return (config as AntigravityConfig & { cli_first?: boolean }).cli_first ?? false;
 }
@@ -3689,6 +3869,7 @@ function isExplicitQuotaFromUrl(urlString: string): boolean {
 
 export const __testExports = {
   getHeaderStyleFromUrl,
+  isCapacityRetryBudgetExhausted,
   resolveHeaderRoutingDecision,
   resolveQuotaFallbackHeaderStyle,
 };

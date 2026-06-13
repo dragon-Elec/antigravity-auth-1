@@ -196,7 +196,7 @@ describe("updateOpencodeConfig", () => {
     expect(result.error).toBeDefined();
   });
 
-  test("includes all model definitions from OPENCODE_MODEL_DEFINITIONS", async () => {
+  test("includes only agy-supported model definitions and whitelists them", async () => {
     const result = await updateOpencodeConfig({ configPath });
 
     expect(result.success).toBe(true);
@@ -204,10 +204,8 @@ describe("updateOpencodeConfig", () => {
     const writtenConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
     const models = writtenConfig.provider.google.models;
 
-    // Verify all models from OPENCODE_MODEL_DEFINITIONS are included
-    for (const modelKey of Object.keys(OPENCODE_MODEL_DEFINITIONS)) {
-      expect(models[modelKey]).toBeDefined();
-    }
+    expect(Object.keys(models).sort()).toEqual(Object.keys(OPENCODE_MODEL_DEFINITIONS).sort());
+    expect(writtenConfig.provider.google.whitelist).toEqual(Object.keys(OPENCODE_MODEL_DEFINITIONS));
   });
 
   test("writes model definitions with fields required by OpenCode provider schema", async () => {

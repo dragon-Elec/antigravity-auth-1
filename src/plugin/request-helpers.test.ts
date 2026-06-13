@@ -779,7 +779,7 @@ describe("transformThinkingParts", () => {
     expect(result.model).toBe("claude-4");
   });
 
-  it("converts Gemini-style thoughtSignature to direct signature field", () => {
+  it("preserves Gemini-style thoughtSignature for the Google stream parser", () => {
     const response = {
       candidates: [
         {
@@ -793,11 +793,11 @@ describe("transformThinkingParts", () => {
       ],
     };
     const result = transformThinkingParts(response) as any;
-    expect(result.candidates[0].content.parts[0].signature).toBe("sig123abc");
-    expect(result.candidates[0].content.parts[0].thoughtSignature).toBeUndefined();
+    expect(result.candidates[0].content.parts[0].thoughtSignature).toBe("sig123abc");
+    expect(result.candidates[0].content.parts[0].signature).toBeUndefined();
   });
 
-  it("converts Anthropic-style signature to direct signature field", () => {
+  it("converts Anthropic-style candidate signature to thoughtSignature for the Google stream parser", () => {
     const response = {
       candidates: [
         {
@@ -811,10 +811,11 @@ describe("transformThinkingParts", () => {
       ],
     };
     const result = transformThinkingParts(response) as any;
-    expect(result.candidates[0].content.parts[0].signature).toBe("anthro_sig_xyz");
+    expect(result.candidates[0].content.parts[0].thoughtSignature).toBe("anthro_sig_xyz");
+    expect(result.candidates[0].content.parts[0].signature).toBeUndefined();
   });
 
-  it("converts signature in content array (Anthropic-style)", () => {
+  it("converts signature in content array to thoughtSignature for the Google stream parser", () => {
     const response = {
       content: [
         { type: "thinking", thinking: "my thoughts", signature: "content_sig" },
@@ -822,11 +823,11 @@ describe("transformThinkingParts", () => {
       ],
     };
     const result = transformThinkingParts(response) as any;
-    expect(result.content[0].signature).toBe("content_sig");
-    expect(result.content[0].thoughtSignature).toBeUndefined();
+    expect(result.content[0].thoughtSignature).toBe("content_sig");
+    expect(result.content[0].signature).toBeUndefined();
   });
 
-  it("prefers signature over thoughtSignature when both present", () => {
+  it("prefers thoughtSignature over signature when both present", () => {
     const response = {
       candidates: [
         {
@@ -839,7 +840,8 @@ describe("transformThinkingParts", () => {
       ],
     };
     const result = transformThinkingParts(response) as any;
-    expect(result.candidates[0].content.parts[0].signature).toBe("sig_primary");
+    expect(result.candidates[0].content.parts[0].thoughtSignature).toBe("sig_fallback");
+    expect(result.candidates[0].content.parts[0].signature).toBeUndefined();
   });
 
   it("does not add signature when no signature present", () => {
@@ -857,7 +859,9 @@ describe("transformThinkingParts", () => {
     };
     const result = transformThinkingParts(response) as any;
     expect(result.candidates[0].content.parts[0].signature).toBeUndefined();
-  });});
+    expect(result.candidates[0].content.parts[0].thoughtSignature).toBeUndefined();
+  });
+});
 
 describe("normalizeThinkingConfig", () => {
   it("returns undefined for non-object input", () => {
@@ -1562,63 +1566,41 @@ describe("cleanJSONSchemaForAntigravity", () => {
 
 describe("createSyntheticErrorResponse", () => {
   it("returns a Response with 200 OK status", async () => {
-    const response = createSyntheticErrorResponse("Test error", "claude-sonnet");
+    const response = createSyntheticErrorResponse("Test error", "antigravity-gemini-3.5-flash");
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("text/event-stream");
   });
 
-  it("includes error message in SSE stream content", async () => {
-    const response = createSyntheticErrorResponse("Context too long", "claude-sonnet");
+  it("includes error message in Gemini SSE stream content", async () => {
+    const response = createSyntheticErrorResponse("Context too long", "antigravity-gemini-3.5-flash");
     const text = await response.text();
 
     expect(text).toContain("Context too long");
     expect(text).toContain("data:");
-    expect(text).toContain("message_start");
-    expect(text).toContain("message_stop");
+    expect(text).toContain("finishReason");
+    expect(text).toContain("STOP");
+    expect(text.endsWith("\n\n")).toBe(true);
   });
 
-  it("uses provided model in message_start event", async () => {
-    const response = createSyntheticErrorResponse("Error", "claude-opus-4");
-    const text = await response.text();
-
-    expect(text).toContain("claude-opus-4");
-  });
-
-  it("generates valid Claude SSE event structure", async () => {
-    const response = createSyntheticErrorResponse("Test", "test-model");
-    const text = await response.text();
-    const lines = text.split("\n").filter((l) => l.startsWith("data:"));
-
-    expect(lines.length).toBeGreaterThanOrEqual(5);
-
-    const events = lines.map((l) => JSON.parse(l.replace("data: ", "")));
-    const eventTypes = events.map((e) => e.type);
-
-    expect(eventTypes).toContain("message_start");
-    expect(eventTypes).toContain("content_block_start");
-    expect(eventTypes).toContain("content_block_delta");
-    expect(eventTypes).toContain("content_block_stop");
-    expect(eventTypes).toContain("message_stop");
-  });
-
-  it("includes error message in content_block_delta", async () => {
+  it("generates a Gemini candidate text chunk", async () => {
     const response = createSyntheticErrorResponse("Something failed", "model");
     const text = await response.text();
-    const lines = text.split("\n").filter((l) => l.startsWith("data:"));
-    const events = lines.map((l) => JSON.parse(l.replace("data: ", "")));
-    const delta = events.find((e) => e.type === "content_block_delta");
+    const line = text.split("\n").find((item) => item.startsWith("data: "));
+    const event = JSON.parse(line?.replace("data: ", "") ?? "{}");
 
-    expect(delta?.delta?.text).toBe("Something failed");
+    expect(event.candidates?.[0]?.content?.role).toBe("model");
+    expect(event.candidates?.[0]?.content?.parts?.[0]?.text).toBe("Something failed");
   });
 
-  it("sets end_turn stop reason in message_delta", async () => {
+  it("sets Gemini STOP finish reason", async () => {
     const response = createSyntheticErrorResponse("Error", "model");
     const text = await response.text();
-    const lines = text.split("\n").filter((l) => l.startsWith("data:"));
-    const events = lines.map((l) => JSON.parse(l.replace("data: ", "")));
-    const messageDelta = events.find((e) => e.type === "message_delta");
+    const line = text.split("\n").find((item) => item.startsWith("data: "));
+    const event = JSON.parse(line?.replace("data: ", "") ?? "{}");
 
-    expect(messageDelta?.delta?.stop_reason).toBe("end_turn");
+    expect(event.candidates?.[0]?.finishReason).toBe("STOP");
+    expect(event.usageMetadata?.promptTokenCount).toBe(0);
+    expect(event.usageMetadata?.candidatesTokenCount).toBeGreaterThan(0);
   });
 });
 

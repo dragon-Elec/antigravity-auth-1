@@ -172,6 +172,13 @@
       "default": true,
       "type": "boolean"
     },
+    "max_account_switches": {
+      "default": 10,
+      "type": "number",
+      "minimum": 0,
+      "maximum": 500,
+      "description": "Maximum number of account switches per request before giving up."
+    },
     "scheduling_mode": {
       "default": "cache_first",
       "type": "string",
@@ -215,8 +222,15 @@
       "maximum": 5000,
       "description": "Maximum random jitter in milliseconds added to outgoing requests to avoid thundering herd."
     },
+    "switch_account_delay_ms": {
+      "default": 500,
+      "type": "number",
+      "minimum": 0,
+      "maximum": 10000,
+      "description": "Delay in milliseconds before switching to another account after a rate limit."
+    },
     "soft_quota_threshold_percent": {
-      "default": 90,
+      "default": 80,
       "type": "number",
       "minimum": 1,
       "maximum": 100,

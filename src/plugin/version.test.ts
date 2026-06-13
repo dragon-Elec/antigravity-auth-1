@@ -113,14 +113,10 @@ describe("initAntigravityVersion — network failure path", () => {
     expect(headers["User-Agent"]).toContain(`Antigravity/${ANTIGRAVITY_VERSION_FALLBACK}`)
   })
 
-  it("fallback version appears in randomized antigravity headers", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("timeout")))
-
-    const { ANTIGRAVITY_VERSION_FALLBACK, getRandomizedHeaders } = await import("../constants.ts")
-    const { initAntigravityVersion } = await import("./version.ts")
-    await initAntigravityVersion()
+  it("randomized antigravity headers use captured agy CLI version", async () => {
+    const { getRandomizedHeaders } = await import("../constants.ts")
 
     const headers = getRandomizedHeaders("antigravity")
-    expect(headers["User-Agent"]).toContain(ANTIGRAVITY_VERSION_FALLBACK)
+    expect(headers["User-Agent"]).toMatch(/^antigravity\/cli\/1\.0\.4 /)
   })
 })

@@ -17,19 +17,10 @@ describe("OPENCODE_MODEL_DEFINITIONS", () => {
     expect(modelNames).toEqual([
       "antigravity-claude-opus-4-6-thinking",
       "antigravity-claude-sonnet-4-6-thinking",
-      "antigravity-gemini-3.1-flash-image",
       "antigravity-gemini-3.1-pro",
       "antigravity-gemini-3.5-flash",
-      "antigravity-gpt-oss-120b",
-      "gemini-2.5-flash",
-      "gemini-2.5-pro",
-      "gemini-3-flash-preview",
-      "gemini-3.1-flash-image",
-      "gemini-3.1-flash-image-preview",
-      "gemini-3.1-pro-preview",
-      "gemini-3.1-pro-preview-customtools",
-      "gemini-3.5-flash-preview",
-    ]);  });
+    ]);
+  });
 
   it("defines Gemini variants for Antigravity models", () => {
     expect(getModel("antigravity-gemini-3.1-pro").variants).toEqual({
@@ -42,10 +33,14 @@ describe("OPENCODE_MODEL_DEFINITIONS", () => {
       high: { thinkingLevel: "high" },
     });
   });
-  it("defines thinking budget variants for Claude thinking models", () => {
+  it("disables unsupported automatic Claude budget variants", () => {
     expect(getModel("antigravity-claude-opus-4-6-thinking").variants).toEqual({
-      low: { thinkingConfig: { thinkingBudget: 8192 } },
-      max: { thinkingConfig: { thinkingBudget: 32768 } },
+      low: { disabled: true },
+      high: { disabled: true },
+    });
+    expect(getModel("antigravity-claude-sonnet-4-6-thinking").variants).toEqual({
+      low: { disabled: true },
+      high: { disabled: true },
     });
   });
 });

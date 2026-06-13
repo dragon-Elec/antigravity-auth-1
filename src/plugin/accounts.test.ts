@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { AccountManager, type ModelFamily, type HeaderStyle, parseRateLimitReason, calculateBackoffMs, type RateLimitReason, resolveQuotaGroup } from "./accounts";
-import type { AccountStorageV4 } from "./storage";
+import { saveAccounts, type AccountStorageV4 } from "./storage";
 import type { OAuthAuthDetails } from "./types";
 
 // Mock storage to prevent test data from leaking to real config files
@@ -227,6 +227,50 @@ describe("AccountManager", () => {
 
     const next = manager.getNextForFamily(family);
     expect(next?.parts.refreshToken).toBe("r3");
+  });
+
+  it("keeps round-robin cursors separate by model family", () => {
+    const stored: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        { refreshToken: "r2", projectId: "p2", addedAt: 1, lastUsed: 0 },
+        { refreshToken: "r3", projectId: "p3", addedAt: 1, lastUsed: 0 },
+      ],
+      activeIndex: 0,
+    };
+
+    const manager = new AccountManager(undefined, stored);
+
+    expect(manager.getCurrentOrNextForFamily("claude", null, "round-robin")?.index).toBe(0);
+    expect(manager.getCurrentOrNextForFamily("claude", null, "round-robin")?.index).toBe(1);
+    expect(manager.getCurrentOrNextForFamily("gemini", null, "round-robin")?.index).toBe(0);
+  });
+
+  it("does not persist transient cooldown and switch metadata", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    vi.mocked(saveAccounts).mockClear();
+
+    const stored: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+      ],
+      activeIndex: 0,
+    };
+
+    const manager = new AccountManager(undefined, stored);
+    const account = manager.getCurrentOrNextForFamily("claude")!;
+    manager.markSwitched(account, "rate-limit", "claude");
+    manager.markAccountCoolingDown(account, 30_000, "auth-failure");
+
+    await manager.saveToDisk();
+
+    const saved = vi.mocked(saveAccounts).mock.calls.at(-1)?.[0];
+    expect(saved?.accounts[0]).not.toHaveProperty("lastSwitchReason");
+    expect(saved?.accounts[0]).not.toHaveProperty("coolingDownUntil");
+    expect(saved?.accounts[0]).not.toHaveProperty("cooldownReason");
   });
 
   it("attaches fallback access tokens only to the matching stored account", () => {
@@ -1143,6 +1187,34 @@ describe("AccountManager", () => {
 
       expect(saveSpy).toHaveBeenCalledTimes(1);
 
+      saveSpy.mockRestore();
+    });
+
+    it("treats account storage lock contention as non-fatal debug noise", async () => {
+      vi.useFakeTimers();
+
+      const stored: AccountStorageV4 = {
+        version: 4,
+        accounts: [
+          { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        ],
+        activeIndex: 0,
+      };
+
+      const manager = new AccountManager(undefined, stored);
+      const saveSpy = vi.spyOn(manager, "saveToDisk").mockRejectedValue(
+        new Error("Lock file is already being held"),
+      );
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+      manager.requestSaveToDisk();
+      const flushPromise = manager.flushSaveToDisk();
+      await vi.advanceTimersByTimeAsync(1500);
+
+      await expect(flushPromise).resolves.toBeUndefined();
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      warnSpy.mockRestore();
       saveSpy.mockRestore();
     });
   });

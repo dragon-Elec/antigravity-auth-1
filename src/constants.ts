@@ -26,10 +26,9 @@ export const ANTIGRAVITY_REDIRECT_URI = "http://localhost:51121/oauth-callback";
 
 /**
  * Root endpoints for the Antigravity API (in fallback order).
- * CLIProxy and Vibeproxy use the daily sandbox endpoint first,
- * then fallback to autopush and prod if needed.
+ * Live agy CLI 1.0.4 traffic uses daily-cloudcode-pa.googleapis.com.
  */
-export const ANTIGRAVITY_ENDPOINT_DAILY = "https://daily-cloudcode-pa.sandbox.googleapis.com";
+export const ANTIGRAVITY_ENDPOINT_DAILY = "https://daily-cloudcode-pa.googleapis.com";
 export const ANTIGRAVITY_ENDPOINT_AUTOPUSH = "https://autopush-cloudcode-pa.sandbox.googleapis.com";
 export const ANTIGRAVITY_ENDPOINT_PROD = "https://cloudcode-pa.googleapis.com";
 
@@ -43,15 +42,15 @@ export const ANTIGRAVITY_ENDPOINT_FALLBACKS = [
   ANTIGRAVITY_ENDPOINT_PROD,
 ] as const;
 /**
- * Preferred endpoint order for project discovery (prod first, then fallbacks).
- * loadCodeAssist appears to be best supported on prod for managed project resolution.
+ * Preferred endpoint order for project discovery.
+ * agy CLI probes daily-cloudcode-pa.googleapis.com first.
  */
 export const ANTIGRAVITY_LOAD_ENDPOINTS = [
-  ANTIGRAVITY_ENDPOINT_PROD,
   ANTIGRAVITY_ENDPOINT_DAILY,
+  ANTIGRAVITY_ENDPOINT_PROD,
 ] as const;
 /**
- * Primary endpoint to use (daily sandbox - same as CLIProxy/Vibeproxy).
+ * Primary endpoint to use (captured agy CLI daily endpoint).
  */
 export const ANTIGRAVITY_ENDPOINT = ANTIGRAVITY_ENDPOINT_DAILY;
 
@@ -127,16 +126,10 @@ export const GEMINI_CLI_HEADERS = {
   "X-Goog-Api-Client": "gl-node/22.17.0",
   "Client-Metadata": "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI",
 } as const;
-const ANTIGRAVITY_PLATFORMS = ["windows/amd64", "darwin/arm64", "darwin/amd64"] as const;
-
-const ANTIGRAVITY_API_CLIENTS = [
-  "google-cloud-sdk vscode_cloudshelleditor/0.1",
-  "google-cloud-sdk vscode/1.96.0",
-  "google-cloud-sdk vscode/1.95.0",
-] as const;
-
-function randomFrom<T>(arr: readonly T[]): T {
-  return arr[Math.floor(Math.random() * arr.length)]!;
+function buildAntigravityPlatformArch(): string {
+  const platform = process.platform === "win32" ? "windows" : process.platform || "unknown";
+  const arch = process.arch === "x64" ? "amd64" : process.arch === "ia32" ? "386" : process.arch || "unknown";
+  return `${platform}/${arch}`;
 }
 
 export type HeaderSet = {
@@ -152,12 +145,10 @@ export function getRandomizedHeaders(style: HeaderStyle, model?: string): Header
       "X-Goog-Api-Client": GEMINI_CLI_HEADERS["X-Goog-Api-Client"],
       "Client-Metadata": GEMINI_CLI_HEADERS["Client-Metadata"],
     };
-  }  const platform = randomFrom(ANTIGRAVITY_PLATFORMS);
-  const metadataPlatform = platform.startsWith("windows") ? "WINDOWS" : "MACOS";
+  }
+  const platform = buildAntigravityPlatformArch();
   return {
-    "User-Agent": `antigravity/${getAntigravityVersion()} ${platform}`,
-    "X-Goog-Api-Client": randomFrom(ANTIGRAVITY_API_CLIENTS),
-    "Client-Metadata": `{"ideType":"ANTIGRAVITY","platform":"${metadataPlatform}","pluginType":"GEMINI"}`,
+    "User-Agent": `antigravity/cli/1.0.4 ${platform}`,
   };
 }
 

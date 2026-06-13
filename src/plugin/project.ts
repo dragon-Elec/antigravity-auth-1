@@ -1,10 +1,15 @@
 import {
-  getAntigravityHeaders,
   ANTIGRAVITY_ENDPOINT_FALLBACKS,
   ANTIGRAVITY_LOAD_ENDPOINTS,
+  ANTIGRAVITY_ENDPOINT_PROD,
   ANTIGRAVITY_DEFAULT_PROJECT_ID,
 } from "../constants";
+import { fetchWithAgyCliTransport } from "./agy-transport";
 import { formatRefreshParts, parseRefreshParts } from "./auth";
+import {
+  buildAntigravityHarnessBootstrapHeaders,
+  buildAntigravityLoadCodeAssistMetadata,
+} from "./fingerprint";
 import { createLogger } from "./logger";
 import type { OAuthAuthDetails, ProjectContextResult } from "./types";
 
@@ -20,12 +25,7 @@ interface CachedProjectContext {
 
 const projectContextResultCache = new Map<string, CachedProjectContext>();
 const projectContextPendingCache = new Map<string, Promise<ProjectContextResult>>();
-const CODE_ASSIST_METADATA = {
-  ideType: "ANTIGRAVITY",
-  platform: process.platform === "win32" ? "WINDOWS" : "MACOS",
-  pluginType: "GEMINI",
-} as const;
-
+const provisionFailedKeys = new Set<string>();
 interface AntigravityUserTier {
   id?: string;
   isDefault?: boolean;
@@ -49,16 +49,11 @@ interface OnboardUserPayload {
   };
 }
 
-function buildMetadata(projectId?: string): Record<string, string> {
-  const metadata: Record<string, string> = {
-    ideType: CODE_ASSIST_METADATA.ideType,
-    platform: CODE_ASSIST_METADATA.platform,
-    pluginType: CODE_ASSIST_METADATA.pluginType,
+function buildBootstrapRequestBody(extra: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    ...extra,
+    metadata: buildAntigravityLoadCodeAssistMetadata(),
   };
-  if (projectId) {
-    metadata.duetProject = projectId;
-  }
-  return metadata;
 }
 
 /**
@@ -116,10 +111,16 @@ export function invalidateProjectContextCache(refresh?: string): void {
   if (!refresh) {
     projectContextPendingCache.clear();
     projectContextResultCache.clear();
+    provisionFailedKeys.clear();
     return;
   }
   projectContextPendingCache.delete(refresh);
   projectContextResultCache.delete(refresh);
+  provisionFailedKeys.delete(refresh);
+}
+
+export function clearProvisionFailedKeys(): void {
+  provisionFailedKeys.clear();
 }
 
 /**
@@ -127,18 +128,10 @@ export function invalidateProjectContextCache(refresh?: string): void {
  */
 export async function loadManagedProject(
   accessToken: string,
-  projectId?: string,
+  _projectId?: string,
 ): Promise<LoadCodeAssistPayload | null> {
-  const metadata = buildMetadata(projectId);
-  const requestBody: Record<string, unknown> = { metadata };
-
-  const loadHeaders: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${accessToken}`,
-    "User-Agent": "google-api-nodejs-client/9.15.1",
-    "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
-    "Client-Metadata": getAntigravityHeaders()["Client-Metadata"],
-  };
+  const requestBody = buildBootstrapRequestBody();
+  const loadHeaders = buildAntigravityHarnessBootstrapHeaders(accessToken);
 
   const loadEndpoints = Array.from(
     new Set<string>([...ANTIGRAVITY_LOAD_ENDPOINTS, ...ANTIGRAVITY_ENDPOINT_FALLBACKS]),
@@ -146,7 +139,7 @@ export async function loadManagedProject(
 
   for (const baseEndpoint of loadEndpoints) {
     try {
-      const response = await fetch(
+      const response = await fetchWithAgyCliTransport(
         `${baseEndpoint}/v1internal:loadCodeAssist`,
         {
           method: "POST",
@@ -180,29 +173,29 @@ export async function onboardManagedProject(
   attempts = 10,
   delayMs = 5000,
 ): Promise<string | undefined> {
-  const metadata = buildMetadata(projectId);
-  const requestBody: Record<string, unknown> = {
-    tierId,
-    metadata,
-  };
+  const requestBody: Record<string, unknown> = { tierId };
+  const onboardEndpoints = Array.from(
+    new Set<string>([ANTIGRAVITY_ENDPOINT_PROD, ...ANTIGRAVITY_LOAD_ENDPOINTS, ...ANTIGRAVITY_ENDPOINT_FALLBACKS]),
+  );
 
-  for (const baseEndpoint of ANTIGRAVITY_ENDPOINT_FALLBACKS) {
+  for (const baseEndpoint of onboardEndpoints) {
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
-        const response = await fetch(
+        const response = await fetchWithAgyCliTransport(
           `${baseEndpoint}/v1internal:onboardUser`,
           {
             method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              Authorization: `Bearer ${accessToken}`,
-              ...getAntigravityHeaders(),
-            },
+            headers: buildAntigravityHarnessBootstrapHeaders(accessToken),
             body: JSON.stringify(requestBody),
           },
         );
 
         if (!response.ok) {
+          log.debug("Onboard request failed", {
+            endpoint: baseEndpoint,
+            status: response.status,
+            statusText: response.statusText,
+          });
           break;
         }
 
@@ -257,6 +250,12 @@ export async function ensureProjectContext(auth: OAuthAuthDetails): Promise<Proj
     }
 
     const fallbackProjectId = ANTIGRAVITY_DEFAULT_PROJECT_ID;
+
+    if (cacheKey && provisionFailedKeys.has(cacheKey)) {
+      const effectiveProjectId = parts.projectId || fallbackProjectId;
+      return { auth, effectiveProjectId };
+    }
+
     const persistManagedProject = async (managedProjectId: string): Promise<ProjectContextResult> => {
       const updatedAuth: OAuthAuthDetails = {
         ...auth,
@@ -280,7 +279,7 @@ export async function ensureProjectContext(auth: OAuthAuthDetails): Promise<Proj
 
     // No managed project found - try to auto-provision one via onboarding.
     // This handles accounts that were added before managed project provisioning was required.
-    const tierId = getDefaultTierId(loadPayload?.allowedTiers) ?? "FREE";
+    const tierId = getDefaultTierId(loadPayload?.allowedTiers) ?? "free-tier";
     log.debug("Auto-provisioning managed project", { tierId, projectId: parts.projectId });
     
     const provisionedProjectId = await onboardManagedProject(
@@ -297,6 +296,10 @@ export async function ensureProjectContext(auth: OAuthAuthDetails): Promise<Proj
     log.warn("Failed to provision managed project - account may not work correctly", {
       hasProjectId: !!parts.projectId,
     });
+
+    if (cacheKey) {
+      provisionFailedKeys.add(cacheKey);
+    }
 
     if (parts.projectId) {
       return { auth, effectiveProjectId: parts.projectId };

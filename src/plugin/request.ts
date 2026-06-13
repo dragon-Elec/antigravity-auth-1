@@ -7,7 +7,8 @@ import {
   SKIP_THOUGHT_SIGNATURE,
   getRandomizedHeaders,
   type HeaderStyle,
-} from "../constants";import { cacheSignature, getCachedSignature } from "./cache";
+} from "../constants";
+import { cacheSignature, getCachedSignature } from "./cache";
 import { getKeepThinking } from "./config";
 import {
   createStreamingTransformer,
@@ -66,8 +67,15 @@ import {
   computeClaudeMaxOutputTokens,
   type ThinkingTier,
   appendClaudeThinkingHint,
-} from "./transform";import { detectErrorType } from "./recovery";
+} from "./transform";
+import { detectErrorType } from "./recovery";
 import { getSessionFingerprint, buildFingerprintHeaders, type Fingerprint } from "./fingerprint";
+import {
+  appendGeminiDumpResponseText,
+  createGeminiDumpResponseTransform,
+  noteGeminiDumpResponse,
+  type GeminiDumpContext,
+} from "./gemini-dump";
 import type { GoogleSearchConfig } from "./transform/types";
 
 const log = createLogger("request");
@@ -77,6 +85,66 @@ const PLUGIN_SESSION_ID = `-${crypto.randomUUID()}`;
 const sessionDisplayedThinkingHashes = new Set<string>();
 
 const MIN_SIGNATURE_LENGTH = 50;
+
+const ANTIGRAVITY_ENVELOPE_FIELD_ORDER = [
+  "project",
+  "requestId",
+  "request",
+  "model",
+  "userAgent",
+  "requestType",
+  "enabledCreditTypes",
+] as const;
+
+function buildAntigravityRequestId(type: "agent" | "checkpoint" = "agent"): string {
+  if (type === "checkpoint") {
+    return `checkpoint/${crypto.randomUUID()}`;
+  }
+  return `agent/${crypto.randomUUID()}/${Date.now()}/${crypto.randomUUID()}/2`;
+}
+
+function getAgyMaxOutputTokens(model: string): number | undefined {
+  const lower = model.toLowerCase();
+  if (lower === "gemini-3.5-flash-low" || lower === "gemini-3.5-flash-extra-low" || lower === "gemini-3-flash-agent") {
+    return 65536;
+  }
+  if (lower === "gemini-3.1-pro-low" || lower === "gemini-pro-agent") {
+    return 65535;
+  }
+  if (lower === "claude-sonnet-4-6" || lower === "claude-opus-4-6-thinking") {
+    return 64000;
+  }
+  return undefined;
+}
+
+function applyAgyGenerationDefaults(model: string, generationConfig: Record<string, unknown>, headerStyle: HeaderStyle): void {
+  if (headerStyle !== "antigravity") {
+    return;
+  }
+  const maxOutputTokens = getAgyMaxOutputTokens(model);
+  if (maxOutputTokens !== undefined) {
+    generationConfig.maxOutputTokens = maxOutputTokens;
+    delete generationConfig.max_output_tokens;
+  }
+}
+
+function orderAntigravityEnvelope(body: Record<string, unknown>): Record<string, unknown> {
+  const ordered: Record<string, unknown> = {};
+  const remaining = new Set(Object.keys(body));
+
+  for (const key of ANTIGRAVITY_ENVELOPE_FIELD_ORDER) {
+    if (key in body) {
+      ordered[key] = body[key];
+      remaining.delete(key);
+    }
+  }
+
+  for (const key of remaining) {
+    ordered[key] = body[key];
+  }
+
+  return ordered;
+}
 
 function buildSignatureSessionKey(
   sessionId: string,
@@ -890,6 +958,8 @@ export function prepareAntigravityRequest(
 
   headers.set("Authorization", `Bearer ${accessToken}`);
   headers.delete("x-api-key");
+  headers.delete("x-goog-api-key");
+  headers.delete("x-session-affinity");
   // Strip x-goog-user-project header to prevent 403 auth/license conflicts.
   // This header is added by OpenCode/AI SDK and can force project-level checks
   // that are not required for Antigravity/Gemini CLI OAuth requests.
@@ -939,6 +1009,18 @@ export function prepareAntigravityRequest(
           ...parsedBody,
           model: effectiveModel,
         } as Record<string, unknown>;
+
+        if (headerStyle === "antigravity") {
+          if (typeof wrappedBody.requestId !== "string" || !wrappedBody.requestId) {
+            wrappedBody.requestId = buildAntigravityRequestId("agent");
+          }
+          if (typeof wrappedBody.userAgent !== "string" || !wrappedBody.userAgent) {
+            wrappedBody.userAgent = "antigravity";
+          }
+          if (typeof wrappedBody.requestType !== "string" || !wrappedBody.requestType) {
+            wrappedBody.requestType = "agent";
+          }
+        }
 
         // Some callers may already send an Antigravity-wrapped body.
         // We still need to sanitize Claude thinking blocks (remove cache_control)
@@ -1023,7 +1105,7 @@ export function prepareAntigravityRequest(
           needsSignedThinkingWarmup = hasToolUse && !hasSignedThinking && !hasCachedThinking;
         }
 
-        body = safeStringify(wrappedBody);
+        body = safeStringify(headerStyle === "antigravity" ? orderAntigravityEnvelope(wrappedBody) : wrappedBody);
       } else {
         const requestPayload: Record<string, unknown> = { ...parsedBody };
         const rawGenerationConfig = requestPayload.generationConfig as Record<string, unknown> | undefined;
@@ -1049,8 +1131,8 @@ export function prepareAntigravityRequest(
           );
 
           effectiveModel = variantResolved.actualModel;
-          tierThinkingLevel = variantResolved.thinkingLevel ?? variantConfig.thinkingLevel;
-          tierThinkingBudget = undefined;
+          tierThinkingBudget = variantResolved.thinkingBudget;
+          tierThinkingLevel = variantResolved.thinkingLevel ?? (variantResolved.thinkingBudget ? undefined : variantConfig.thinkingLevel);
         } else if (variantConfig?.thinkingBudget) {
           if (isGemini3) {
             // Legacy format for Gemini 3 - convert with deprecation warning
@@ -1087,11 +1169,7 @@ export function prepareAntigravityRequest(
         const hasAssistantHistory = Array.isArray(requestPayload.contents) &&
           requestPayload.contents.some((c: any) => c?.role === "model" || c?.role === "assistant");
 
-        // Claude Sonnet 4.6 is non-thinking only.
-        // Ignore any client-provided thinkingConfig for this model.
-        const lowerEffective = effectiveModel.toLowerCase();
-        const isClaudeSonnetNonThinking = lowerEffective === "claude-sonnet-4-6";
-        const effectiveUserThinkingConfig = (isClaudeSonnetNonThinking || isImageModel) ? undefined : userThinkingConfig;
+        const effectiveUserThinkingConfig = isImageModel ? undefined : userThinkingConfig;
 
         // For image models, add imageConfig instead of thinkingConfig
         if (isImageModel) {
@@ -1129,7 +1207,7 @@ export function prepareAntigravityRequest(
         } else {
           const finalThinkingConfig = resolveThinkingConfig(
             effectiveUserThinkingConfig,
-            isClaudeSonnetNonThinking ? false : (resolved.isThinkingModel ?? isThinkingCapableModel(effectiveModel)),
+            resolved.isThinkingModel ?? isThinkingCapableModel(effectiveModel),
             isClaude,
             hasAssistantHistory,
           );
@@ -1142,8 +1220,8 @@ export function prepareAntigravityRequest(
             // Build thinking config based on model type
             let thinkingConfig: Record<string, unknown>;
 
-            if (isClaudeThinking) {
-              // Claude uses snake_case keys
+            if (isClaudeThinking && headerStyle !== "antigravity") {
+              // Claude-on-Gemini fallback uses snake_case keys.
               thinkingConfig = {
                 include_thoughts: normalizedThinking.includeThoughts ?? true,
                 ...(typeof thinkingBudget === "number" && thinkingBudget > 0
@@ -1166,14 +1244,17 @@ export function prepareAntigravityRequest(
 
             if (rawGenerationConfig) {
               rawGenerationConfig.thinkingConfig = thinkingConfig;
+              applyAgyGenerationDefaults(effectiveModel, rawGenerationConfig, headerStyle);
 
               if (isClaudeThinking && typeof thinkingBudget === "number" && thinkingBudget > 0) {
                 const currentMax = (rawGenerationConfig.maxOutputTokens ?? rawGenerationConfig.max_output_tokens) as number | undefined;
-                if (!currentMax || currentMax <= thinkingBudget) {
+                if (headerStyle === "antigravity" && !currentMax) {
+                  rawGenerationConfig.maxOutputTokens = 64000;
+                } else if (!currentMax || currentMax <= thinkingBudget) {
                   rawGenerationConfig.maxOutputTokens = computeClaudeMaxOutputTokens(thinkingBudget);
-                  if (rawGenerationConfig.max_output_tokens !== undefined) {
-                    delete rawGenerationConfig.max_output_tokens;
-                  }
+                }
+                if (rawGenerationConfig.max_output_tokens !== undefined) {
+                  delete rawGenerationConfig.max_output_tokens;
                 }
               }
               requestPayload.generationConfig = rawGenerationConfig;
@@ -1181,12 +1262,19 @@ export function prepareAntigravityRequest(
               const generationConfig: Record<string, unknown> = { thinkingConfig };
 
               if (isClaudeThinking && typeof thinkingBudget === "number" && thinkingBudget > 0) {
-                generationConfig.maxOutputTokens = computeClaudeMaxOutputTokens(thinkingBudget);
+                generationConfig.maxOutputTokens = headerStyle === "antigravity"
+                  ? 64000
+                  : computeClaudeMaxOutputTokens(thinkingBudget);
               }
+              applyAgyGenerationDefaults(effectiveModel, generationConfig, headerStyle);
               requestPayload.generationConfig = generationConfig;
             }
           } else if (rawGenerationConfig?.thinkingConfig) {
             delete rawGenerationConfig.thinkingConfig;
+            applyAgyGenerationDefaults(effectiveModel, rawGenerationConfig, headerStyle);
+            requestPayload.generationConfig = rawGenerationConfig;
+          } else if (rawGenerationConfig) {
+            applyAgyGenerationDefaults(effectiveModel, rawGenerationConfig, headerStyle);
             requestPayload.generationConfig = rawGenerationConfig;
           }
         } // End of else block for non-image models
@@ -1567,32 +1655,34 @@ export function prepareAntigravityRequest(
         resolvedProjectId = effectiveProjectId;
 
         // System instruction injection removed — CLIProxyAPI v6.9.x no longer injects it
-        const wrappedBody: Record<string, unknown> = {
-          project: effectiveProjectId,
-          model: effectiveModel,
-          request: requestPayload,
-        };
-
-        if (headerStyle === "antigravity") {
-          wrappedBody.requestType = "agent";
-          wrappedBody.userAgent = "antigravity";
-          wrappedBody.requestId = "agent-" + crypto.randomUUID();
-        }
+        const wrappedBody: Record<string, unknown> = headerStyle === "antigravity"
+          ? {
+              project: effectiveProjectId,
+              requestId: buildAntigravityRequestId("agent"),
+              request: requestPayload,
+              model: effectiveModel,
+              userAgent: "antigravity",
+              requestType: "agent",
+            }
+          : {
+              project: effectiveProjectId,
+              model: effectiveModel,
+              request: requestPayload,
+            };
         if (wrappedBody.request && typeof wrappedBody.request === 'object') {
           // Use stable session ID for signature caching across multi-turn conversations
           sessionId = signatureSessionKey;
           (wrappedBody.request as any).sessionId = signatureSessionKey;
         }
 
-        body = safeStringify(wrappedBody);
+        body = safeStringify(headerStyle === "antigravity" ? orderAntigravityEnvelope(wrappedBody) : wrappedBody);
       }
     } catch {
       throw new Error("Failed to build Antigravity request body");
     }
   }
-  if (streaming) {
-    headers.set("Accept", "text/event-stream");
-  }
+  // agy CLI does not send an Accept header on streamGenerateContent requests.
+  // Avoid adding one here; the response is selected by ?alt=sse.
 
   // Add interleaved thinking header for Claude thinking models
   // This enables real-time streaming of thinking tokens
@@ -1620,6 +1710,7 @@ export function prepareAntigravityRequest(
     const fingerprintHeaders = buildFingerprintHeaders(fingerprint);
 
     headers.set("User-Agent", fingerprintHeaders["User-Agent"] || selectedHeaders["User-Agent"]);
+    headers.set("Accept-Encoding", "gzip");
   } else {
     // Gemini CLI mode: match official google-gemini/gemini-cli User-Agent format
     const geminiCliHeaders = getRandomizedHeaders("gemini-cli", requestedModel);
@@ -1710,6 +1801,7 @@ export async function transformAntigravityResponse(
   toolDebugSummary?: string,
   toolDebugPayload?: string,
   debugLines?: string[],
+  dumpContext?: GeminiDumpContext | null,
 ): Promise<Response> {
   const contentType = response.headers.get("content-type") ?? "";
   const isJsonResponse = contentType.includes("application/json");
@@ -1743,6 +1835,10 @@ export async function transformAntigravityResponse(
     logAntigravityDebugResponse(debugContext, response, {
       note: "Streaming SSE response (real-time transform)",
     });
+    noteGeminiDumpResponse(dumpContext, response);
+
+    const rawDumpTransformer = createGeminiDumpResponseTransform(dumpContext);
+    const sourceBody = rawDumpTransformer ? response.body.pipeThrough(rawDumpTransformer) : response.body;
 
     const streamingTransformer = createStreamingTransformer(
       defaultSignatureStore,
@@ -1769,7 +1865,7 @@ export async function transformAntigravityResponse(
         // injectSyntheticThinking removed - keep_thinking now unified with debug via debugText
       },
     );
-    return new Response(response.body.pipeThrough(streamingTransformer), {
+    return new Response(sourceBody.pipeThrough(streamingTransformer), {
       status: response.status,
       statusText: response.statusText,
       headers,
@@ -1781,6 +1877,8 @@ export async function transformAntigravityResponse(
   try {
     const headers = new Headers(response.headers);
     const text = await response.text();
+    noteGeminiDumpResponse(dumpContext, response);
+    appendGeminiDumpResponseText(dumpContext, text);
 
     if (!response.ok) {
       let errorBody;

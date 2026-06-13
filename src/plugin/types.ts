@@ -90,6 +90,12 @@ export interface PluginEventPayload {
 }
 
 export interface PluginResult {
+  config?: (input: Record<string, unknown>) => Promise<void> | void;
+  "command.execute.before"?: (input: {
+    command: string;
+    arguments: string;
+    sessionID: string;
+  }) => Promise<void> | void;
   auth: {
     provider: string;
     loader: (getAuth: GetAuth, provider: Provider) => Promise<LoaderResult | Record<string, unknown>>;

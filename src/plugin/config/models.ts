@@ -1,5 +1,6 @@
 export {
   OPENCODE_MODEL_DEFINITIONS,
+  getAntigravityOpencodeModelIds,
   getPublicModelDefinitions,
 } from "../model-registry"
 

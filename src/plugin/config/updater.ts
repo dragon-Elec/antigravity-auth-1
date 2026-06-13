@@ -7,7 +7,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { homedir } from "node:os";
-import { OPENCODE_MODEL_DEFINITIONS } from "./models";
+import { getAntigravityOpencodeModelIds, OPENCODE_MODEL_DEFINITIONS } from "./models";
 
 // =============================================================================
 // Types
@@ -151,8 +151,10 @@ export async function updateOpencodeConfig(
       config.provider.google = {};
     }
 
-    // Replace google models with plugin models
+    // Replace google models with the agy-supported catalog and hide built-in
+    // Google models that Antigravity does not support.
     config.provider.google.models = { ...OPENCODE_MODEL_DEFINITIONS };
+    config.provider.google.whitelist = getAntigravityOpencodeModelIds();
 
     // Ensure config directory exists
     const configDir = dirname(configPath);
