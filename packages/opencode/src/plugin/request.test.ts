@@ -84,8 +84,21 @@ describe("request.ts", () => {
       expect(isGenerativeLanguageRequest("https://api.anthropic.com/v1/messages")).toBe(false);
     });
 
-    it("returns false for non-string inputs", () => {
-      expect(isGenerativeLanguageRequest({} as any)).toBe(false);
+    it("detects URL and Request inputs (not only strings)", () => {
+      // Matching on string-only would let fetch(new Request(...)) / fetch(new URL(...))
+      // bypass the interceptor entirely.
+      expect(
+        isGenerativeLanguageRequest(new URL("https://generativelanguage.googleapis.com/v1/models")),
+      ).toBe(true);
+      expect(
+        isGenerativeLanguageRequest(
+          new Request("https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:streamGenerateContent"),
+        ),
+      ).toBe(true);
+    });
+
+    it("returns false for non-API URL and Request inputs", () => {
+      expect(isGenerativeLanguageRequest(new URL("https://api.anthropic.com/v1/messages"))).toBe(false);
       expect(isGenerativeLanguageRequest(new Request("https://example.com"))).toBe(false);
     });
   });

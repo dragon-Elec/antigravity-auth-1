@@ -884,10 +884,24 @@ export function getLastCacheStats() {
 const STREAM_ACTION = "streamGenerateContent";
 
 /**
- * Detects requests headed to the Google Generative Language API so we can intercept them.
+ * Extract a URL string from any fetch() input shape (string, URL, or Request).
  */
-export function isGenerativeLanguageRequest(input: RequestInfo): input is string {
-  return typeof input === "string" && input.includes("generativelanguage.googleapis.com");
+export function fetchInputToUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") return input;
+  if (input instanceof URL) return input.href;
+  // Request-like object
+  const url = (input as Request).url;
+  return typeof url === "string" ? url : String(input);
+}
+
+/**
+ * Detects requests headed to the Google Generative Language API so we can
+ * intercept them. Handles string, URL, and Request inputs — matching on URL
+ * only would let `fetch(new Request(...))` / `fetch(new URL(...))` bypass the
+ * interceptor entirely.
+ */
+export function isGenerativeLanguageRequest(input: RequestInfo | URL): boolean {
+  return fetchInputToUrl(input).includes("generativelanguage.googleapis.com");
 }
 
 /**
@@ -957,7 +971,8 @@ export function prepareAntigravityRequest(
   // that are not required for Antigravity/Gemini CLI OAuth requests.
   headers.delete("x-goog-user-project");
 
-  const match = input.match(/\/models\/([^:]+):(\w+)/);
+  const urlString = fetchInputToUrl(input);
+  const match = urlString.match(/\/models\/([^:]+):(\w+)/);
   if (!match) {
     return {
       request: input,

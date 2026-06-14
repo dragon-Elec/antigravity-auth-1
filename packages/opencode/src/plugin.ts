@@ -1601,6 +1601,30 @@ export const createAntigravityPlugin = (providerId: string) => async (
             return fetch(input, init);
           }
 
+          // Normalize Request/URL inputs to (urlString, init) so the
+          // string-based transform pipeline sees the real method/headers/body.
+          // Without this, fetch(new Request(...)) would carry its payload on the
+          // Request object where our string path can't read it.
+          if (typeof input !== "string") {
+            if (input instanceof Request) {
+              const req = input;
+              const headers = new Headers(req.headers);
+              if (init?.headers) {
+                new Headers(init.headers).forEach((v, k) => headers.set(k, v));
+              }
+              const bodyBuffer = req.body ? await req.clone().arrayBuffer() : undefined;
+              init = {
+                method: init?.method ?? req.method,
+                headers,
+                body: init?.body ?? (bodyBuffer ? Buffer.from(bodyBuffer) : undefined),
+                signal: init?.signal ?? req.signal,
+              };
+              input = req.url;
+            } else {
+              input = String((input as URL).href ?? input);
+            }
+          }
+
           if (accountManager.getAccountCount() === 0) {
             return createSyntheticErrorResponse(
               "No Antigravity accounts configured. Run `opencode auth login`.",

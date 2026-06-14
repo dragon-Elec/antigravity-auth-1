@@ -21,7 +21,13 @@ async function getLockFunction(): Promise<LockFunction> {
   const fn = (typeof mod.lock === "function" ? mod.lock : undefined)
     || (mod.default && typeof (mod.default as Record<string, unknown>).lock === "function"
       ? (mod.default as Record<string, unknown>).lock : undefined)
-  _cachedLock = (fn as LockFunction) || (async () => async () => {})
+  if (typeof fn !== "function") {
+    // Never silently degrade to a no-op lock — that would let concurrent
+    // processes corrupt the account file. Fail loudly so the caller's
+    // try/catch surfaces it instead of writing unlocked.
+    throw new Error("proper-lockfile did not expose a lock() function; cannot acquire account file lock")
+  }
+  _cachedLock = fn as LockFunction
   return _cachedLock
 }
 const lockfile = { lock: (path: string, options?: Record<string, unknown>) => getLockFunction().then(fn => fn(path, options)) }
