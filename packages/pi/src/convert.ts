@@ -1,3 +1,4 @@
+import { toGeminiSchema } from "@cortexkit/antigravity-auth-core"
 import type {
   Context,
   ImageContent,
@@ -25,7 +26,7 @@ interface GeminiTool {
   functionDeclarations: Array<{
     name: string
     description: string
-    parametersJsonSchema?: Record<string, unknown>
+    parameters?: unknown
   }>
 }
 
@@ -132,10 +133,13 @@ function convertTools(tools: Tool[] | undefined): GeminiTool[] | undefined {
   if (!tools?.length) return undefined
   return [
     {
+      // Match the agy wire format (MITM-verified): field name is `parameters`
+      // (not `parametersJsonSchema`) and schemas are sanitized to Gemini shape
+      // (UPPERCASE types, unsupported keywords stripped) via core's toGeminiSchema.
       functionDeclarations: tools.map((tool) => ({
         name: tool.name,
         description: tool.description,
-        parametersJsonSchema: tool.parameters as Record<string, unknown>,
+        parameters: toGeminiSchema(tool.parameters),
       })),
     },
   ]

@@ -167,7 +167,15 @@ describe("buildGeminiRequest", () => {
       }),
     )
     expect(request.systemInstruction).toEqual({ parts: [{ text: "be terse" }] })
-    expect(request.tools?.[0]?.functionDeclarations[0]?.name).toBe("read")
+    const decl = request.tools?.[0]?.functionDeclarations[0]
+    expect(decl?.name).toBe("read")
+    // Must match the agy wire format: field name `parameters`, sanitized to
+    // Gemini shape with UPPERCASE types (not raw `parametersJsonSchema`).
+    expect(decl).not.toHaveProperty("parametersJsonSchema")
+    expect(decl?.parameters).toEqual({
+      type: "OBJECT",
+      properties: { path: { type: "STRING" } },
+    })
   })
 
   it("converts image content into inlineData", () => {

@@ -54,6 +54,7 @@ export {
   buildGemini25ThinkingConfig,
   buildImageGenerationConfig,
   normalizeGeminiTools,
+  toGeminiSchema,
   applyGeminiTransforms,
 } from "./gemini.ts";
 export type { GeminiTransformOptions, GeminiTransformResult, ImageConfig } from "./gemini.ts";
