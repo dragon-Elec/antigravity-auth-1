@@ -20,6 +20,7 @@ import {
 } from "@earendil-works/pi-ai"
 
 import { buildGeminiRequest } from "./convert.ts"
+import { getPackedRefresh } from "./credential-cache.ts"
 
 const STREAM_ACTION = "streamGenerateContent"
 
@@ -166,9 +167,14 @@ async function sendAntigravityRequest(options: {
   const resolved = resolveModelForHeaderStyle(options.model.id, "antigravity")
   const wireModel = resolved.actualModel
 
+  // Recover the packed refresh (refreshToken|projectId|managedProjectId) that
+  // login/refresh resolved; pi only hands the stream the bare access token.
+  // With it, ensureProjectContext returns the cached managedProjectId directly
+  // instead of re-running loadCodeAssist every turn.
+  const packedRefresh = getPackedRefresh(options.accessToken) ?? ""
   const projectContext = await ensureProjectContext({
     type: "oauth",
-    refresh: "",
+    refresh: packedRefresh,
     access: options.accessToken,
     expires: Date.now() + 60_000,
   })

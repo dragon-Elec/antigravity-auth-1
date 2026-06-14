@@ -10,6 +10,7 @@ import type {
 } from "@earendil-works/pi-ai"
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent"
 
+import { rememberPackedRefresh } from "./credential-cache.ts"
 import { streamCortexKitAntigravity } from "./stream.ts"
 
 const ANTIGRAVITY_PROVIDER_ID = "google-antigravity"
@@ -93,7 +94,12 @@ export default function cortexKitPiAntigravityAuth(pi: ExtensionAPI): void {
       name: "Google Antigravity (CortexKit)",
       login: loginAntigravity,
       refreshToken: refreshAntigravityCredentials,
-      getApiKey: (credentials) => credentials.access,
+      getApiKey: (credentials) => {
+        // Bridge the packed refresh (refreshToken|projectId|managedProjectId)
+        // to the stream, which otherwise only receives the bare access token.
+        rememberPackedRefresh(credentials.access, credentials.refresh)
+        return credentials.access
+      },
     },
     streamSimple: streamCortexKitAntigravity,
   })
