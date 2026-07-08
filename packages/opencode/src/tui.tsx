@@ -134,18 +134,18 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
           
           <box flexDirection="row" gap={2} paddingLeft={2}>
             <text fg={t().textMuted}>C:{acc.claude.toString()}%</text>
-            <text fg={t().textMuted}>
-              P:{acc.pro.toString()}%
+            <box flexDirection="row" gap={0.5}>
+              <text fg={t().textMuted}>P:{acc.pro.toString()}%</text>
               <Show when={acc.proReset}>
-                <text fg={t().warning}> ({acc.proReset})</text>
+                <text fg={t().warning}>({acc.proReset})</text>
               </Show>
-            </text>
-            <text fg={t().textMuted}>
-              F:{acc.flash.toString()}%
+            </box>
+            <box flexDirection="row" gap={0.5}>
+              <text fg={t().textMuted}>F:{acc.flash.toString()}%</text>
               <Show when={acc.flashReset}>
-                <text fg={t().warning}> ({acc.flashReset})</text>
+                <text fg={t().warning}>({acc.flashReset})</text>
               </Show>
-            </text>
+            </box>
           </box>
           
           <Show when={acc.cooldownReason}>
