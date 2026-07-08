@@ -152,9 +152,11 @@ function waitForHead(socket: net.Socket, timeoutMs: number, onTimeout: () => voi
 }
 
 async function connectViaProxy(proxyUrl: URL, targetUrl: URL, timeoutMs: number, onDebug?: (message: string) => void): Promise<tls.TLSSocket> {
+  // @ts-ignore - autoSelectFamily is supported in Node 20+ but may be missing in types
   const proxySocket = net.connect({
     host: proxyUrl.hostname,
     port: Number(proxyUrl.port || DEFAULT_PROXY_PORT),
+    autoSelectFamily: false,
   })
 
   await new Promise<void>((resolve, reject) => {
@@ -220,10 +222,12 @@ async function connectViaProxy(proxyUrl: URL, targetUrl: URL, timeoutMs: number,
 
 async function connectDirect(targetUrl: URL, timeoutMs: number, onDebug?: (message: string) => void): Promise<tls.TLSSocket> {
   return await new Promise<tls.TLSSocket>((resolve, reject) => {
+    // @ts-ignore - autoSelectFamily is supported in Node 20+ but may be missing in types
     const socket = tls.connect({
       host: targetUrl.hostname,
       port: Number(targetUrl.port || DEFAULT_HTTPS_PORT),
       servername: targetUrl.hostname,
+      autoSelectFamily: false,
     })
     const timeout = setTimeout(() => {
       onDebug?.(`agy transport TLS connect timeout after ${timeoutMs}ms`)
