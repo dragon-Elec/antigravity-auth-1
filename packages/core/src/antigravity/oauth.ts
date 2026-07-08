@@ -106,6 +106,7 @@ interface AntigravityTokenResponse {
   access_token: string;
   expires_in: number;
   refresh_token: string;
+  id_token?: string;
 }
 
 interface AntigravityUserInfo {
@@ -254,19 +255,46 @@ export async function exchangeAntigravity(
 
     const tokenPayload = (await tokenResponse.json()) as AntigravityTokenResponse;
 
-    const userInfoResponse = await fetch(
-      "https://www.googleapis.com/oauth2/v1/userinfo?alt=json",
-      {
-        headers: {
-          Authorization: `Bearer ${tokenPayload.access_token}`,
-          "User-Agent": GEMINI_CLI_HEADERS["User-Agent"],
-        },
-      },
-    );
+    // Primary: extract email from id_token JWT payload (no extra HTTP call).
+    // This is more reliable than userinfo which can fail due to network issues.
+    let email: string | undefined;
+    if (tokenPayload.id_token) {
+      try {
+        const payload = tokenPayload.id_token.split(".")[1];
+        if (payload) {
+          const decoded = JSON.parse(
+            Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8")
+          );
+          if (decoded.email && decoded.email_verified) {
+            email = decoded.email;
+            log.debug("Extracted email from id_token", { email });
+          }
+        }
+      } catch {
+        // Ignore JWT parse errors
+      }
+    }
 
-    const userInfo = userInfoResponse.ok
-      ? ((await userInfoResponse.json()) as AntigravityUserInfo)
-      : {};
+    // Fallback: userinfo endpoint if id_token didn't have email
+    if (!email) {
+      const userInfoResponse = await fetch(
+        "https://www.googleapis.com/oauth2/v1/userinfo?alt=json",
+        {
+          headers: {
+            Authorization: `Bearer ${tokenPayload.access_token}`,
+            "User-Agent": GEMINI_CLI_HEADERS["User-Agent"],
+          },
+        },
+      );
+
+      if (userInfoResponse.ok) {
+        const userInfo = (await userInfoResponse.json()) as AntigravityUserInfo;
+        email = userInfo.email;
+        if (email) {
+          log.debug("Extracted email from userinfo", { email });
+        }
+      }
+    }
 
     const refreshToken = tokenPayload.refresh_token;
     if (!refreshToken) {
@@ -285,7 +313,7 @@ export async function exchangeAntigravity(
       refresh: storedRefresh,
       access: tokenPayload.access_token,
       expires: calculateTokenExpiry(startTime, tokenPayload.expires_in),
-      email: userInfo.email,
+      email,
       projectId: effectiveProjectId || "",
     };
   } catch (error) {
