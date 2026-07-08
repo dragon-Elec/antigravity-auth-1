@@ -1498,10 +1498,15 @@ export const createAntigravityPlugin = (providerId: string) => async (
         const tuiJsonPath = join(homedir(), ".config", "opencode", "tui.json");
         if (existsSync(tuiJsonPath)) {
           const tuiConfig = JSON.parse(readFileSync(tuiJsonPath, "utf8"));
-          const plugins = tuiConfig.plugin || [];
-          const pluginName = "@cortexkit/opencode-antigravity-auth";
-          if (!plugins.includes(pluginName)) {
-            plugins.push(pluginName);
+          const plugins: string[] = tuiConfig.plugin || [];
+          const npmName = "@cortexkit/opencode-antigravity-auth";
+          // Resolve plugin package root from this file's location
+          const pluginDir = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
+          const alreadyRegistered = plugins.some(
+            (p) => p === npmName || (typeof p === "string" && p.includes("antigravity-auth") && existsSync(join(p, "package.json")))
+          );
+          if (!alreadyRegistered) {
+            plugins.push(pluginDir);
             tuiConfig.plugin = plugins;
             writeFileSync(tuiJsonPath, JSON.stringify(tuiConfig, null, 2));
           }
