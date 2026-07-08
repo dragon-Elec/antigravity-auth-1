@@ -1503,7 +1503,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
           // Resolve plugin package root from this file's location
           const pluginDir = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
           const alreadyRegistered = plugins.some(
-            (p) => p === npmName || (typeof p === "string" && p.includes("antigravity-auth") && existsSync(join(p, "package.json")))
+            (p) => p === npmName || p === pluginDir
           );
           if (!alreadyRegistered) {
             plugins.push(pluginDir);
