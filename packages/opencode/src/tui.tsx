@@ -121,7 +121,7 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
       {props.accounts.map((acc) => (
         <box flexDirection="column" width="100%" marginBottom={1}>
           <box flexDirection="row" gap={1}>
-            {acc.isActive ? <text fg={t().accent}>▶</text> : null}
+            {acc.isActive ? <text fg={t().accent}>▶</text> : ""}
             <text fg={t().text} bold>{acc.email}</text>
             <text fg={acc.tokenStatus === "valid" ? t().success : acc.tokenStatus === "cooldown" ? t().warning : t().error}>
               {acc.tokenStatus === "valid" ? "●" : acc.tokenStatus === "cooldown" ? "⚠" : "✗"}
@@ -133,11 +133,11 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
             <text fg={t().textMuted}>C:{acc.claude.toString()}%</text>
             <text fg={t().textMuted}>
               P:{acc.pro.toString()}%
-              {acc.proReset ? <text fg={t().warning}> ({acc.proReset})</text> : null}
+              {acc.proReset ? <text fg={t().warning}> ({acc.proReset})</text> : ""}
             </text>
             <text fg={t().textMuted}>
               F:{acc.flash.toString()}%
-              {acc.flashReset ? <text fg={t().warning}> ({acc.flashReset})</text> : null}
+              {acc.flashReset ? <text fg={t().warning}> ({acc.flashReset})</text> : ""}
             </text>
           </box>
           
@@ -147,13 +147,13 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
                 ✗ Cooldown ({acc.cooldownReason}) - {acc.cooldownRemaining} remaining
               </text>
             </box>
-          ) : null}
+          ) : ""}
           
           {acc.issues.length > 0 ? (
             <box paddingLeft={2}>
               <text fg={t().warning}>⚠ {acc.issues.join(", ")}</text>
             </box>
-          ) : null}
+          ) : ""}
         </box>
       ))}
       
