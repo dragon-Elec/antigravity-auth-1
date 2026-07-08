@@ -1721,7 +1721,7 @@ export function prepareAntigravityRequest(
     const fingerprintHeaders = buildFingerprintHeaders(fingerprint);
 
     headers.set("User-Agent", fingerprintHeaders["User-Agent"] || selectedHeaders["User-Agent"]);
-    headers.set("Accept-Encoding", "gzip");
+    headers.set("Accept-Encoding", "identity");
   } else {
     // Gemini CLI mode: match official google-gemini/gemini-cli User-Agent format
     const geminiCliHeaders = getRandomizedHeaders("gemini-cli", requestedModel);

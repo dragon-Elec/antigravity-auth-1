@@ -240,39 +240,40 @@ export async function executeSearch(
 
   // Build tools array - only grounding tools, no function declarations
   const tools: Array<Record<string, unknown>> = [];
-  tools.push({ googleSearch: {} });
+  tools.push({
+    googleSearch: {
+      enhancedContent: {
+        imageSearch: {
+          maxResultCount: 5
+        }
+      }
+    }
+  });
   if (urls && urls.length > 0) {
     tools.push({ urlContext: {} });
   }
 
-  const requestPayload = {
-    systemInstruction: {
-      parts: [{ text: SEARCH_SYSTEM_INSTRUCTION }],
-    },
-    contents: [
-      {
-        role: "user",
-        parts: [{ text: prompt }],
-      },
-    ],
-    tools,
-    generationConfig: {
-      temperature: 0,
-      topP: 1,
-    },
-  };
-
   // Wrap in Antigravity format using the captured agy CLI envelope ordering.
   const wrappedBody = {
     project: projectId,
-    requestId: generateRequestId(),
     request: {
-      ...requestPayload,
-      sessionId: getSessionId(),
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: prompt }],
+        },
+      ],
+      systemInstruction: {
+        role: "user",
+        parts: [{ text: SEARCH_SYSTEM_INSTRUCTION }],
+      },
+      tools,
+      generationConfig: {
+        candidateCount: 1,
+      },
     },
     model: SEARCH_MODEL,
-    userAgent: "antigravity",
-    requestType: "agent",
+    requestType: "web_search",
   };
 
   // Use non-streaming endpoint for search
@@ -292,7 +293,7 @@ export async function executeSearch(
         "User-Agent": fingerprintHeaders["User-Agent"] ?? getSessionFingerprint().userAgent,
         Authorization: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
-        "Accept-Encoding": "gzip",
+        "Accept-Encoding": "identity",
       },
       body: JSON.stringify(wrappedBody),
     }, { signal: abortSignal ?? AbortSignal.timeout(SEARCH_TIMEOUT_MS) });

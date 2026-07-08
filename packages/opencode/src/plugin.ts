@@ -10,7 +10,7 @@ import {
 } from "./constants";
 import { authorizeAntigravity, exchangeAntigravity } from "./antigravity/oauth";
 import type { AntigravityTokenExchangeResult } from "./antigravity/oauth";
-import { accessTokenExpired, isOAuthAuth, parseRefreshParts, formatRefreshParts } from "./plugin/auth";
+import { accessTokenExpired, isOAuthAuth, parseRefreshParts, formatRefreshParts, loadManagedProject } from "./plugin/auth";
 import { promptAddAnotherAccount, promptLoginMode, promptProjectId } from "./plugin/cli";
 import { fetchWithAgyCliTransport } from "./plugin/agy-transport";
 import { buildFingerprintHeaders, getSessionFingerprint } from "./plugin/fingerprint";
@@ -507,7 +507,7 @@ async function verifyAccountAccess(
     "User-Agent": fingerprintHeaders["User-Agent"] ?? getSessionFingerprint().userAgent,
     Authorization: `Bearer ${refreshedAuth.access}`,
     "Content-Type": "application/json",
-    "Accept-Encoding": "gzip",
+    "Accept-Encoding": "identity",
   };
 
   const requestBody = {
@@ -1432,7 +1432,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
       // Get access token and project ID
       const parts = parseRefreshParts(auth.refresh);
-      const projectId = parts.managedProjectId || parts.projectId || "unknown";
+      let projectId = parts.managedProjectId || parts.projectId || "unknown";
 
       // Ensure we have a valid access token
       let accessToken = auth.access;
@@ -1447,6 +1447,20 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
       if (!accessToken) {
         return "Error: No valid access token available. Please run `opencode auth login` to re-authenticate.";
+      }
+
+      // Fallback: if project ID is unknown, resolve it dynamically
+      if (projectId === "unknown") {
+        try {
+          const projectInfo = await loadManagedProject(accessToken);
+          if (projectInfo) {
+            projectId = (typeof projectInfo.cloudaicompanionProject === "string"
+              ? projectInfo.cloudaicompanionProject
+              : projectInfo.cloudaicompanionProject?.id) || "unknown";
+          }
+        } catch (error) {
+          log.warn("Dynamic project ID resolution failed", { error: String(error) });
+        }
       }
 
       return executeSearch(

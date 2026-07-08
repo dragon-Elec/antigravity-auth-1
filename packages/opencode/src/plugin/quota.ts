@@ -227,7 +227,7 @@ async function fetchAvailableModels(
           "User-Agent": quotaUserAgent,
           Authorization: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
-          "Accept-Encoding": "gzip",
+          "Accept-Encoding": "identity",
         },
         body: JSON.stringify(body),
       }, { timeoutMs: FETCH_TIMEOUT_MS });
@@ -247,7 +247,7 @@ async function fetchAvailableModels(
               "User-Agent": quotaUserAgent,
               Authorization: `Bearer ${accessToken}`,
               "Content-Type": "application/json",
-              "Accept-Encoding": "gzip",
+              "Accept-Encoding": "identity",
             },
             body: JSON.stringify({}),
           }, { timeoutMs: FETCH_TIMEOUT_MS });

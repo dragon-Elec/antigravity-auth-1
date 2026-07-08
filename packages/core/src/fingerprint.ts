@@ -9,7 +9,7 @@
 
 import * as crypto from "node:crypto";
 
-export const AGY_CLI_VERSION = "1.0.4";
+export const AGY_CLI_VERSION = "1.0.13";
 const ANTIGRAVITY_API_CLIENT = "antigravity-cli";
 
 export interface ClientMetadata {
@@ -70,7 +70,7 @@ export function buildAntigravityHarnessUserAgent(
   platform = process.platform,
   arch = process.arch,
 ): string {
-  return `antigravity/cli/${version} ${buildAntigravityHarnessPlatformArch(platform, arch)}`;
+  return `antigravity/cli/${version} (aidev_client; os_type=${normalizeHarnessPlatform(platform)}; arch=${normalizeHarnessArch(arch)})`;
 }
 
 export function buildAntigravityHarnessLoadCodeAssistUserAgent(version = AGY_CLI_VERSION): string {
@@ -90,7 +90,7 @@ export function buildAntigravityHarnessBootstrapHeaders(accessToken: string): Re
     "User-Agent": buildAntigravityHarnessLoadCodeAssistUserAgent(),
     Authorization: `Bearer ${accessToken}`,
     "Content-Type": "application/json",
-    "Accept-Encoding": "gzip",
+    "Accept-Encoding": "identity",
   };
 }
 
