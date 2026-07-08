@@ -121,7 +121,7 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
       {props.accounts.map((acc) => (
         <box flexDirection="column" width="100%" marginBottom={1}>
           <box flexDirection="row" gap={1}>
-            {acc.isActive && <text fg={t().accent}>▶</text>}
+            {acc.isActive ? <text fg={t().accent}>▶</text> : null}
             <text fg={t().text} bold>{acc.email}</text>
             <text fg={acc.tokenStatus === "valid" ? t().success : acc.tokenStatus === "cooldown" ? t().warning : t().error}>
               {acc.tokenStatus === "valid" ? "●" : acc.tokenStatus === "cooldown" ? "⚠" : "✗"}
@@ -130,30 +130,30 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
           </box>
           
           <box flexDirection="row" gap={2} paddingLeft={2}>
-            <text fg={t().textMuted}>C:{acc.claude}%</text>
+            <text fg={t().textMuted}>C:{acc.claude.toString()}%</text>
             <text fg={t().textMuted}>
-              P:{acc.pro}%
-              {acc.proReset && <text fg={t().warning}> ({acc.proReset})</text>}
+              P:{acc.pro.toString()}%
+              {acc.proReset ? <text fg={t().warning}> ({acc.proReset})</text> : null}
             </text>
             <text fg={t().textMuted}>
-              F:{acc.flash}%
-              {acc.flashReset && <text fg={t().warning}> ({acc.flashReset})</text>}
+              F:{acc.flash.toString()}%
+              {acc.flashReset ? <text fg={t().warning}> ({acc.flashReset})</text> : null}
             </text>
           </box>
           
-          {acc.cooldownReason && (
+          {acc.cooldownReason ? (
             <box paddingLeft={2}>
               <text fg={t().error}>
                 ✗ Cooldown ({acc.cooldownReason}) - {acc.cooldownRemaining} remaining
               </text>
             </box>
-          )}
+          ) : null}
           
-          {acc.issues.length > 0 && (
+          {acc.issues.length > 0 ? (
             <box paddingLeft={2}>
               <text fg={t().warning}>⚠ {acc.issues.join(", ")}</text>
             </box>
-          )}
+          ) : null}
         </box>
       ))}
       
@@ -162,9 +162,9 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
       </box>
       
       <box flexDirection="row" gap={2}>
-        <text fg={t().textMuted}>{totalAccounts} accounts</text>
+        <text fg={t().textMuted}>{totalAccounts.toString()} accounts</text>
         {issueCount > 0 ? (
-          <text fg={t().warning}>• {issueCount} issue{issueCount > 1 ? "s" : ""}</text>
+          <text fg={t().warning}>• {issueCount.toString()} issue{issueCount > 1 ? "s" : ""}</text>
         ) : (
           <text fg={t().success}>• All healthy</text>
         )}
