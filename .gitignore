@@ -48,3 +48,4 @@ test-file.ts
 
 # Platform-specific lockfile (npm optional-dep bug #4828 with rollup native binaries)
 package-lock.json
+.slim/deepwork/

@@ -5,6 +5,13 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "type": "module",
+  "exports": {
+    ".": "./dist/index.js",
+    "./tui": {
+      "import": "./src/tui.tsx"
+    }
+  },
+  "oc-plugin": ["server", "tui"],
   "license": "MIT",
   "author": "CortexKit",
   "repository": {
