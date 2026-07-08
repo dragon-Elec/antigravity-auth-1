@@ -152,7 +152,10 @@ function waitForHead(socket: net.Socket, timeoutMs: number, onTimeout: () => voi
 }
 
 async function connectViaProxy(proxyUrl: URL, targetUrl: URL, timeoutMs: number, onDebug?: (message: string) => void): Promise<tls.TLSSocket> {
-  // @ts-ignore - autoSelectFamily is supported in Node 20+ but may be missing in types
+  // @ts-ignore - autoSelectFamily is supported in Node 20+ but may be missing in types.
+  // Set to false to disable Happy Eyeballs. Google's DNS returns many IPs, which causes
+  // Node's internalConnectMultiple to attach too many listeners to its internal AbortSignal,
+  // triggering a MaxListenersExceededWarning that corrupts the TUI.
   const proxySocket = net.connect({
     host: proxyUrl.hostname,
     port: Number(proxyUrl.port || DEFAULT_PROXY_PORT),
@@ -222,7 +225,10 @@ async function connectViaProxy(proxyUrl: URL, targetUrl: URL, timeoutMs: number,
 
 async function connectDirect(targetUrl: URL, timeoutMs: number, onDebug?: (message: string) => void): Promise<tls.TLSSocket> {
   return await new Promise<tls.TLSSocket>((resolve, reject) => {
-    // @ts-ignore - autoSelectFamily is supported in Node 20+ but may be missing in types
+    // @ts-ignore - autoSelectFamily is supported in Node 20+ but may be missing in types.
+    // Set to false to disable Happy Eyeballs. Google's DNS returns many IPs, which causes
+    // Node's internalConnectMultiple to attach too many listeners to its internal AbortSignal,
+    // triggering a MaxListenersExceededWarning that corrupts the TUI.
     const socket = tls.connect({
       host: targetUrl.hostname,
       port: Number(targetUrl.port || DEFAULT_HTTPS_PORT),
