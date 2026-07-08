@@ -66,7 +66,7 @@ const IMAGE_GENERATION_MODELS = /image|imagen/i;
 function supportsThinkingTiers(model: string): boolean {
   const lower = model.toLowerCase();
   return (
-    lower.includes("gemini-3") ||
+    (lower.includes("gemini-3") && !lower.includes("flash-lite")) ||
     lower.includes("gemini-2.5") ||
     (lower.includes("claude") && lower.includes("thinking"))
   );
@@ -108,7 +108,7 @@ function isThinkingCapableModel(model: string): boolean {
   const lower = model.toLowerCase();
   return (
     lower.includes("thinking") ||
-    lower.includes("gemini-3") ||
+    (lower.includes("gemini-3") && !lower.includes("flash-lite")) ||
     lower.includes("gemini-2.5")
   );
 }
@@ -118,7 +118,7 @@ function isGemini3ProModel(model: string): boolean {
 }
 
 function isGemini3FlashModel(model: string): boolean {
-  return GEMINI_3_FLASH_REGEX.test(model);
+  return GEMINI_3_FLASH_REGEX.test(model) && !model.toLowerCase().includes("flash-lite");
 }
 
 function isGemini35FlashModel(model: string): boolean {
