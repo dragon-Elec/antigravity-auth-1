@@ -2,6 +2,7 @@
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
+import { Show } from "solid-js"
 
 interface AccountData {
   email?: string
@@ -121,7 +122,9 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
       {props.accounts.map((acc) => (
         <box flexDirection="column" width="100%" marginBottom={1}>
           <box flexDirection="row" gap={1}>
-            {acc.isActive ? <text fg={t().accent}>▶</text> : ""}
+            <Show when={acc.isActive}>
+              <text fg={t().accent}>▶</text>
+            </Show>
             <text fg={t().text} bold>{acc.email}</text>
             <text fg={acc.tokenStatus === "valid" ? t().success : acc.tokenStatus === "cooldown" ? t().warning : t().error}>
               {acc.tokenStatus === "valid" ? "●" : acc.tokenStatus === "cooldown" ? "⚠" : "✗"}
@@ -133,27 +136,31 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
             <text fg={t().textMuted}>C:{acc.claude.toString()}%</text>
             <text fg={t().textMuted}>
               P:{acc.pro.toString()}%
-              {acc.proReset ? <text fg={t().warning}> ({acc.proReset})</text> : ""}
+              <Show when={acc.proReset}>
+                <text fg={t().warning}> ({acc.proReset})</text>
+              </Show>
             </text>
             <text fg={t().textMuted}>
               F:{acc.flash.toString()}%
-              {acc.flashReset ? <text fg={t().warning}> ({acc.flashReset})</text> : ""}
+              <Show when={acc.flashReset}>
+                <text fg={t().warning}> ({acc.flashReset})</text>
+              </Show>
             </text>
           </box>
           
-          {acc.cooldownReason ? (
+          <Show when={acc.cooldownReason}>
             <box paddingLeft={2}>
               <text fg={t().error}>
                 ✗ Cooldown ({acc.cooldownReason}) - {acc.cooldownRemaining} remaining
               </text>
             </box>
-          ) : ""}
+          </Show>
           
-          {acc.issues.length > 0 ? (
+          <Show when={acc.issues.length > 0}>
             <box paddingLeft={2}>
               <text fg={t().warning}>⚠ {acc.issues.join(", ")}</text>
             </box>
-          ) : ""}
+          </Show>
         </box>
       ))}
       
@@ -163,11 +170,9 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
       
       <box flexDirection="row" gap={2}>
         <text fg={t().textMuted}>{totalAccounts.toString()} accounts</text>
-        {issueCount > 0 ? (
+        <Show when={issueCount > 0} fallback={<text fg={t().success}>• All healthy</text>}>
           <text fg={t().warning}>• {issueCount.toString()} issue{issueCount > 1 ? "s" : ""}</text>
-        ) : (
-          <text fg={t().success}>• All healthy</text>
-        )}
+        </Show>
       </box>
       
       <box marginTop={1} justifyContent="flex-end" width="100%">
