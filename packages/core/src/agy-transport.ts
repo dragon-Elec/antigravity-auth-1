@@ -404,6 +404,17 @@ function buildResponseStream(
   idleTimeoutMs?: number,
   onDebug?: (message: string) => void,
 ): ReadableStream<Uint8Array> {
+  // Fast-path for empty bodies: close immediately without waiting for socket
+  // EOF or idle timeout. This prevents 3-minute hangs on 404s with no body.
+  if (head.contentLength === 0 && leftover.length === 0) {
+    socket.destroy()
+    return new ReadableStream({
+      start(controller) {
+        controller.close()
+      },
+    })
+  }
+
   const source = new PassThrough()
   if (leftover.length > 0) {
     source.write(leftover)
