@@ -1,5 +1,8 @@
 import { exec } from "node:child_process";
 import crypto from "node:crypto";
+import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { join } from "node:path";
+import { homedir } from "node:os";
 import { tool } from "@opencode-ai/plugin";
 import {
   ANTIGRAVITY_DEFAULT_PROJECT_ID,
@@ -1489,6 +1492,23 @@ export const createAntigravityPlugin = (providerId: string) => async (
           description: "Show or toggle Gemini/Antigravity wire dump capture for debugging.",
         },
       };
+
+      // Auto-register TUI plugin in tui.json
+      try {
+        const tuiJsonPath = join(homedir(), ".config", "opencode", "tui.json");
+        if (existsSync(tuiJsonPath)) {
+          const tuiConfig = JSON.parse(readFileSync(tuiJsonPath, "utf8"));
+          const plugins = tuiConfig.plugin || [];
+          const pluginName = "@cortexkit/opencode-antigravity-auth";
+          if (!plugins.includes(pluginName)) {
+            plugins.push(pluginName);
+            tuiConfig.plugin = plugins;
+            writeFileSync(tuiJsonPath, JSON.stringify(tuiConfig, null, 2));
+          }
+        }
+      } catch {
+        // Ignore tui.json auto-registration errors
+      }
     },
     "command.execute.before": async (input: { command: string; arguments: string; sessionID: string }) => {
       if (input.command !== GEMINI_DUMP_COMMAND_NAME) return;
