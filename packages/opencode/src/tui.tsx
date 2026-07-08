@@ -1,6 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 import type { TuiPlugin, TuiPluginApi } from "@opencode-ai/plugin/tui"
-import { readFileSync } from "node:fs"
+import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 
 interface AccountData {
@@ -8,7 +8,6 @@ interface AccountData {
   refreshToken?: string
   lastUsed?: number
   enabled?: boolean
-  rateLimitResetTimes?: Record<string, number>
   cachedQuota?: {
     claude?: { remainingFraction?: number; resetTime?: string }
     "gemini-pro"?: { remainingFraction?: number; resetTime?: string }
@@ -66,56 +65,44 @@ function formatCooldownRemaining(until: number | undefined): string {
   return `${Math.floor(mins / 60)}h${mins % 60}m`
 }
 
-function loadAccounts(configPath: string): AccountStatus[] {
-  try {
-    const path = join(configPath, "antigravity-accounts.json")
-    const data = JSON.parse(readFileSync(path, "utf8"))
-    const accounts: AccountData[] = data.accounts || []
+async function loadAccounts(configPath: string): Promise<AccountStatus[]> {
+  const path = join(configPath, "antigravity-accounts.json")
+  const content = await readFile(path, "utf8")
+  const data = JSON.parse(content)
+  const accounts: AccountData[] = data.accounts || []
+  const activeIndex = typeof data.activeIndex === "number" ? data.activeIndex : 0
+  
+  return accounts.map((acc, i) => {
+    const quota = acc.cachedQuota || {}
+    const claudeFrac = quota.claude?.remainingFraction ?? 1
+    const proFrac = quota["gemini-pro"]?.remainingFraction ?? 1
+    const flashFrac = quota["gemini-flash"]?.remainingFraction ?? 1
     
-    // Find active account (highest lastUsed)
-    let activeIndex = 0
-    let maxLastUsed = 0
-    accounts.forEach((acc, i) => {
-      if (acc.lastUsed && acc.lastUsed > maxLastUsed) {
-        maxLastUsed = acc.lastUsed
-        activeIndex = i
-      }
-    })
+    const issues: string[] = []
+    if (!acc.email) issues.push("no email")
+    if (acc.enabled === false) issues.push("disabled")
+    if (acc.verificationRequired) issues.push("verification required")
     
-    return accounts.map((acc, i) => {
-      const quota = acc.cachedQuota || {}
-      const claudeFrac = quota.claude?.remainingFraction ?? 0
-      const proFrac = quota["gemini-pro"]?.remainingFraction ?? 0
-      const flashFrac = quota["gemini-flash"]?.remainingFraction ?? 0
-      
-      const issues: string[] = []
-      if (!acc.email) issues.push("no email")
-      if (acc.enabled === false) issues.push("disabled")
-      if (acc.verificationRequired) issues.push("verification required")
-      
-      let tokenStatus: "valid" | "cooldown" | "invalid" = "valid"
-      if (acc.cooldownReason) tokenStatus = "cooldown"
-      else if (!acc.refreshToken || acc.verificationRequired) tokenStatus = "invalid"
-      
-      return {
-        email: acc.email || "[no email]",
-        isActive: i === activeIndex,
-        tokenStatus,
-        lastUsed: formatRelativeTime(acc.lastUsed),
-        claude: Math.round(claudeFrac * 100),
-        pro: Math.round(proFrac * 100),
-        flash: Math.round(flashFrac * 100),
-        proReset: proFrac < 1 ? formatResetTime(quota["gemini-pro"]?.resetTime) : "",
-        flashReset: flashFrac < 1 ? formatResetTime(quota["gemini-flash"]?.resetTime) : "",
-        claudeReset: claudeFrac < 1 ? formatResetTime(quota.claude?.resetTime) : "",
-        cooldownReason: acc.cooldownReason,
-        cooldownRemaining: formatCooldownRemaining(acc.cooldownUntil),
-        issues,
-      }
-    })
-  } catch {
-    return []
-  }
+    let tokenStatus: "valid" | "cooldown" | "invalid" = "valid"
+    if (acc.cooldownReason) tokenStatus = "cooldown"
+    else if (!acc.refreshToken || acc.verificationRequired) tokenStatus = "invalid"
+    
+    return {
+      email: acc.email || "[no email]",
+      isActive: i === activeIndex,
+      tokenStatus,
+      lastUsed: formatRelativeTime(acc.lastUsed),
+      claude: Math.round(claudeFrac * 100),
+      pro: Math.round(proFrac * 100),
+      flash: Math.round(flashFrac * 100),
+      proReset: proFrac < 1 ? formatResetTime(quota["gemini-pro"]?.resetTime) : "",
+      flashReset: flashFrac < 1 ? formatResetTime(quota["gemini-flash"]?.resetTime) : "",
+      claudeReset: claudeFrac < 1 ? formatResetTime(quota.claude?.resetTime) : "",
+      cooldownReason: acc.cooldownReason,
+      cooldownRemaining: formatCooldownRemaining(acc.cooldownUntil),
+      issues,
+    }
+  })
 }
 
 function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
@@ -123,7 +110,7 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
   
   const totalAccounts = props.accounts.length
   const healthyAccounts = props.accounts.filter(a => a.tokenStatus === "valid" && a.issues.length === 0).length
-  const issues = props.accounts.filter(a => a.issues.length > 0 || a.tokenStatus !== "valid").length
+  const issueCount = props.accounts.filter(a => a.issues.length > 0 || a.tokenStatus !== "valid").length
   
   return (
     <box flexDirection="column" width="100%" paddingLeft={2} paddingRight={2}>
@@ -131,52 +118,44 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
         <text fg={t().accent} bold>⚡ Antigravity Status</text>
       </box>
       
-      <For each={props.accounts}>
-        {(acc) => (
-          <box flexDirection="column" width="100%" marginBottom={1}>
-            <box flexDirection="row" gap={1}>
-              <Show when={acc.isActive}>
-                <text fg={t().accent}>▶</text>
-              </Show>
-              <text fg={t().text} bold>{acc.email}</text>
-              <text fg={acc.tokenStatus === "valid" ? t().success : acc.tokenStatus === "cooldown" ? t().warning : t().error}>
-                {acc.tokenStatus === "valid" ? "●" : acc.tokenStatus === "cooldown" ? "⚠" : "✗"}
-              </text>
-              <text fg={t().textMuted}>{acc.lastUsed}</text>
-            </box>
-            
-            <box flexDirection="row" gap={2} paddingLeft={2}>
-              <text fg={t().textMuted}>C:{acc.claude}%</text>
-              <text fg={t().textMuted}>
-                P:{acc.pro}%
-                <Show when={acc.proReset}>
-                  <text fg={t().warning}> ({acc.proReset})</text>
-                </Show>
-              </text>
-              <text fg={t().textMuted}>
-                F:{acc.flash}%
-                <Show when={acc.flashReset}>
-                  <text fg={t().warning}> ({acc.flashReset})</text>
-                </Show>
-              </text>
-            </box>
-            
-            <Show when={acc.cooldownReason}>
-              <box paddingLeft={2}>
-                <text fg={t().error}>
-                  ✗ Cooldown ({acc.cooldownReason}) - {acc.cooldownRemaining} remaining
-                </text>
-              </box>
-            </Show>
-            
-            <Show when={acc.issues.length > 0}>
-              <box paddingLeft={2}>
-                <text fg={t().warning}>⚠ {acc.issues.join(", ")}</text>
-              </box>
-            </Show>
+      {props.accounts.map((acc) => (
+        <box flexDirection="column" width="100%" marginBottom={1}>
+          <box flexDirection="row" gap={1}>
+            {acc.isActive && <text fg={t().accent}>▶</text>}
+            <text fg={t().text} bold>{acc.email}</text>
+            <text fg={acc.tokenStatus === "valid" ? t().success : acc.tokenStatus === "cooldown" ? t().warning : t().error}>
+              {acc.tokenStatus === "valid" ? "●" : acc.tokenStatus === "cooldown" ? "⚠" : "✗"}
+            </text>
+            <text fg={t().textMuted}>{acc.lastUsed}</text>
           </box>
-        )}
-      </For>
+          
+          <box flexDirection="row" gap={2} paddingLeft={2}>
+            <text fg={t().textMuted}>C:{acc.claude}%</text>
+            <text fg={t().textMuted}>
+              P:{acc.pro}%
+              {acc.proReset && <text fg={t().warning}> ({acc.proReset})</text>}
+            </text>
+            <text fg={t().textMuted}>
+              F:{acc.flash}%
+              {acc.flashReset && <text fg={t().warning}> ({acc.flashReset})</text>}
+            </text>
+          </box>
+          
+          {acc.cooldownReason && (
+            <box paddingLeft={2}>
+              <text fg={t().error}>
+                ✗ Cooldown ({acc.cooldownReason}) - {acc.cooldownRemaining} remaining
+              </text>
+            </box>
+          )}
+          
+          {acc.issues.length > 0 && (
+            <box paddingLeft={2}>
+              <text fg={t().warning}>⚠ {acc.issues.join(", ")}</text>
+            </box>
+          )}
+        </box>
+      ))}
       
       <box width="100%" marginTop={1} marginBottom={1}>
         <text fg={t().border}>─────────────────────────────────────────</text>
@@ -184,12 +163,11 @@ function StatusDialog(props: { api: TuiPluginApi; accounts: AccountStatus[] }) {
       
       <box flexDirection="row" gap={2}>
         <text fg={t().textMuted}>{totalAccounts} accounts</text>
-        <Show when={issues > 0}>
-          <text fg={t().warning}>• {issues} issue{issues > 1 ? "s" : ""}</text>
-        </Show>
-        <Show when={healthyAccounts === totalAccounts}>
+        {issueCount > 0 ? (
+          <text fg={t().warning}>• {issueCount} issue{issueCount > 1 ? "s" : ""}</text>
+        ) : (
           <text fg={t().success}>• All healthy</text>
-        </Show>
+        )}
       </box>
       
       <box marginTop={1} justifyContent="flex-end" width="100%">
@@ -208,10 +186,15 @@ const tui: TuiPlugin = async (api: TuiPluginApi) => {
         title: "Antigravity: Show Status",
         category: "Antigravity",
         slashName: "agstatus",
-        run() {
-          const configPath = api.state.path.config
-          const accounts = loadAccounts(configPath)
-          api.ui.dialog.replace(() => <StatusDialog api={api} accounts={accounts} />)
+        async run() {
+          try {
+            const configPath = api.state.path.config
+            const accounts = await loadAccounts(configPath)
+            api.ui.dialog.replace(() => <StatusDialog api={api} accounts={accounts} />)
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            api.ui.toast({ message: `Failed to load status: ${message}`, variant: "error" })
+          }
         },
       },
     ],
