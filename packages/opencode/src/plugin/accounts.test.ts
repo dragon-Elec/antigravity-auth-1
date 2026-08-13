@@ -39,6 +39,60 @@ describe("AccountManager", () => {
     expect(manager.getAccountCount()).toBe(0);
   });
 
+  it("does not resurrect a current auth token missing from a non-empty pool", () => {
+    const fallback: OAuthAuthDetails = {
+      type: "oauth",
+      refresh: "deleted-token|deleted-project",
+      access: "access",
+      expires: 123,
+    };
+    const manager = new AccountManager(fallback, {
+      version: 4,
+      accounts: [
+        { refreshToken: "kept-token", projectId: "kept-project", addedAt: 1, lastUsed: 0 },
+      ],
+      activeIndex: 0,
+    });
+
+    expect(manager.getAccountCount()).toBe(1);
+    expect(manager.getAccounts()[0]?.parts.refreshToken).toBe("kept-token");
+  });
+
+  it("selects the account with the highest cached quota for the requested model", () => {
+    const manager = new AccountManager(undefined, {
+      version: 4,
+      accounts: [
+        {
+          refreshToken: "low-quota",
+          addedAt: 1,
+          lastUsed: 0,
+          cachedQuota: { "gemini-flash": { remainingFraction: 0.1, modelCount: 1 } },
+          cachedQuotaUpdatedAt: 1,
+        },
+        {
+          refreshToken: "high-quota",
+          addedAt: 1,
+          lastUsed: 0,
+          cachedQuota: { "gemini-flash": { remainingFraction: 0.9, modelCount: 1 } },
+          cachedQuotaUpdatedAt: 1,
+        },
+      ],
+      activeIndex: 0,
+    });
+
+    const selected = manager.getCurrentOrNextForFamily(
+      "gemini",
+      "antigravity-gemini-3.6-flash",
+      "hybrid",
+      "antigravity",
+      false,
+      100,
+      600_000,
+    );
+
+    expect(selected?.parts.refreshToken).toBe("high-quota");
+  });
+
   it("persists explicit ineligibility, rejects manual enable, and recovers only after a successful recheck", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   buildAuthFromStoredAccount,
   detectAuthStorageDrift,
+  reconcileAnonymousAuthAccount,
   selectRestorableAccount,
 } from "./auth-drift.ts"
 import type { AccountStorageV4 } from "./storage.ts"
@@ -91,6 +92,55 @@ describe("buildAuthFromStoredAccount", () => {
       access: "",
       expires: 0,
     })
+  })
+})
+
+describe("reconcileAnonymousAuthAccount", () => {
+  it("removes only the anonymous current-auth account and keeps the active named account", () => {
+    const input = storage({
+      activeIndex: 1,
+      accounts: [
+        {
+          email: "active@example.com",
+          refreshToken: "active-refresh",
+          addedAt: 1,
+          lastUsed: 2,
+          enabled: true,
+        },
+        {
+          refreshToken: "anonymous-refresh",
+          addedAt: 3,
+          lastUsed: 4,
+          enabled: true,
+        },
+      ],
+    })
+    const result = reconcileAnonymousAuthAccount(
+      { type: "oauth", refresh: "anonymous-refresh|project-z" },
+      input,
+    )
+
+    expect(result?.storage.accounts.map((account) => account.refreshToken)).toEqual([
+      "active-refresh",
+    ])
+    expect(result?.account.email).toBe("active@example.com")
+    expect(result?.storage.activeIndex).toBe(0)
+  })
+
+  it("does not remove an anonymous account when the pool has no identified account", () => {
+    const input = storage({
+      accounts: [
+        { refreshToken: "anonymous-a", addedAt: 1, lastUsed: 1 },
+        { refreshToken: "anonymous-b", addedAt: 2, lastUsed: 2 },
+      ],
+    })
+
+    expect(
+      reconcileAnonymousAuthAccount(
+        { type: "oauth", refresh: "anonymous-a" },
+        input,
+      ),
+    ).toBeUndefined()
   })
 })
 

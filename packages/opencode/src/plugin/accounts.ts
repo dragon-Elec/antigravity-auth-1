@@ -290,6 +290,17 @@ function isOverSoftQuotaThreshold(
   return isOverThreshold;
 }
 
+function getCachedQuotaRemaining(
+  account: ManagedAccount,
+  family: ModelFamily,
+  model?: string | null,
+): number | undefined {
+  if (!account.cachedQuota) return undefined;
+  const groupData = account.cachedQuota[resolveQuotaGroup(family, model)];
+  if (groupData?.remainingFraction == null) return undefined;
+  return Math.max(0, Math.min(1, groupData.remainingFraction));
+}
+
 export function computeSoftQuotaCacheTtlMs(
   ttlConfig: "auto" | number,
   refreshIntervalMinutes: number
@@ -440,29 +451,6 @@ export class AccountManager {
       // Persist updated fingerprint versions to disk
       if (fingerprintVersionChanged) {
         this.requestSaveToDisk();
-      }
-
-      // If current auth isn't in the loaded accounts, add it to the pool
-      if (authFallback && authParts && authParts.refreshToken) {
-        const hasMatching = this.accounts.some(acc => acc.parts.refreshToken === authParts.refreshToken);
-        if (!hasMatching) {
-          const now = nowMs();
-          const newAccount: ManagedAccount = {
-            index: this.accounts.length,
-            email: undefined,
-            addedAt: now,
-            lastUsed: 0,
-            parts: authParts,
-            access: authFallback.access,
-            expires: authFallback.expires,
-            enabled: true,
-            rateLimitResetTimes: {},
-            touchedForQuota: {},
-            fingerprint: generateFingerprint(),
-            fingerprintHistory: [],
-          };
-          this.accounts.push(newAccount);
-        }
       }
 
       return;
@@ -712,18 +700,34 @@ export class AccountManager {
       const healthTracker = getHealthTracker();
       const tokenTracker = getTokenTracker();
       
+      // Filter for real availability FIRST (same criteria as getNextForFamily),
+      // then apply parent-session isolation. preferAccountOutsideParent only
+      // excludes the parent's account when a viable alternative actually exists
+      // (its `isolated.length > 0 ? isolated : accounts` fallback), so the sole
+      // healthy account is never stripped from subagent/child-session requests.
+      const availableAccounts = this.accounts.filter((acc) => {
+        clearExpiredRateLimits(acc);
+        return acc.enabled !== false &&
+          !isRateLimitedForHeaderStyle(acc, family, headerStyle, model) &&
+          !isOverSoftQuotaThreshold(acc, family, effectiveSoftQuotaThreshold, softQuotaCacheTtlMs, model) &&
+          !this.isAccountCoolingDown(acc);
+      });
       const eligibleAccounts = this.preferAccountOutsideParent(
-        this.accounts.filter(acc => acc.enabled !== false),
+        availableAccounts,
         family,
         identity,
       )
       const accountsWithMetrics: AccountWithMetrics[] = eligibleAccounts.map(acc => {
-          clearExpiredRateLimits(acc);
           return {
             index: acc.index,
             lastUsed: acc.lastUsed,
             healthScore: healthTracker.getScore(acc.index),
-            isRateLimited: isRateLimitedForFamily(acc, family, model) || 
+            // Cached quota remains a ranking hint after its TTL expires. The
+            // age-gated soft-quota predicate above still controls hard
+            // exclusion, so stale data can guide an initial choice but can
+            // never permanently block an account.
+            quotaRemaining: getCachedQuotaRemaining(acc, family, model),
+            isRateLimited: isRateLimitedForHeaderStyle(acc, family, headerStyle, model) ||
                           isOverSoftQuotaThreshold(acc, family, effectiveSoftQuotaThreshold, softQuotaCacheTtlMs, model),
             isCoolingDown: this.isAccountCoolingDown(acc),
           };

@@ -149,6 +149,12 @@ const ALL_MODEL_DEFINITIONS: OpencodeModelDefinitions = {
       output: ["text", "image"],
     },
   }),
+  "antigravity-gemini-3.1-flash-lite": defineModel("antigravity-gemini-3.1-flash-lite", {
+    name: "Gemini 3.1 Flash Lite (Antigravity)",
+    reasoning: false,
+    limit: { context: 1048576, output: 65536 },
+    modalities: DEFAULT_MODALITIES,
+  }),
   "antigravity-gpt-oss-120b-medium": defineModel("antigravity-gpt-oss-120b-medium", {
     name: "GPT-OSS 120B Medium (Antigravity)",
     reasoning: true,
@@ -287,6 +293,7 @@ const ANTIGRAVITY_OPENCODE_MODEL_IDS = [
   "antigravity-claude-sonnet-4-6-thinking",
   "antigravity-claude-opus-4-6-thinking",
   "antigravity-gemini-3.1-flash-image",
+  "antigravity-gemini-3.1-flash-lite",
   "antigravity-gpt-oss-120b-medium",
 ] as const
 

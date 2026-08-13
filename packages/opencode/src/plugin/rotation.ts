@@ -201,6 +201,7 @@ export interface AccountWithMetrics {
   healthScore: number;
   isRateLimited: boolean;
   isCoolingDown: boolean;
+  quotaRemaining?: number;
 }
 
 /**
@@ -279,10 +280,19 @@ export function selectHybridAccount(
         index: acc.index,
         baseScore,
         score: baseScore + stickinessBonus,
-        isCurrent: acc.index === currentAccountIndex
+        isCurrent: acc.index === currentAccountIndex,
+        quotaRemaining: acc.quotaRemaining,
       };
     })
-    .sort((a, b) => b.score - a.score);
+    .sort((a, b) => {
+      // Fresh model quota is the primary routing signal. Health, token
+      // balance, and freshness only break ties between equally provisioned
+      // accounts.
+      const aQuota = a.quotaRemaining ?? -1;
+      const bQuota = b.quotaRemaining ?? -1;
+      if (aQuota !== bQuota) return bQuota - aQuota;
+      return b.score - a.score;
+    });
 
   const best = scored[0];
   if (!best) {
@@ -292,6 +302,12 @@ export function selectHybridAccount(
   // If current account is still a candidate, check if switch is warranted
   const currentCandidate = scored.find(s => s.isCurrent);
   if (currentCandidate && !best.isCurrent) {
+    const bestQuota = best.quotaRemaining;
+    const currentQuota = currentCandidate.quotaRemaining;
+    if (bestQuota !== undefined && (currentQuota === undefined || bestQuota > currentQuota)) {
+      return best.index;
+    }
+
     // Only switch if best beats current's BASE score by threshold
     // (compare base scores to avoid circular stickiness bonus comparison)
     const advantage = best.baseScore - currentCandidate.baseScore;

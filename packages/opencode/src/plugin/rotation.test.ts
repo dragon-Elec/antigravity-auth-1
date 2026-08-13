@@ -509,6 +509,16 @@ describe("selectHybridAccount", () => {
     expect([0, 1, 2]).toContain(result);
   });
 
+  it("prefers higher remaining quota over health and freshness", () => {
+    const tokenTracker = new TokenBucketTracker();
+    const accounts: AccountWithMetrics[] = [
+      { index: 0, lastUsed: 0, healthScore: 100, isRateLimited: false, isCoolingDown: false, quotaRemaining: 0.1 },
+      { index: 1, lastUsed: 0, healthScore: 50, isRateLimited: false, isCoolingDown: false, quotaRemaining: 0.9 },
+    ];
+
+    expect(selectHybridAccount(accounts, tokenTracker, 0)).toBe(1);
+  });
+
   it("filters out rate-limited accounts", () => {
     const tokenTracker = new TokenBucketTracker();
     const accounts: AccountWithMetrics[] = [
