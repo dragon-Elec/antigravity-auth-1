@@ -209,7 +209,8 @@ export const SKIP_THOUGHT_SIGNATURE = "skip_thought_signature_validator";
 
 /**
  * Model used for Google Search grounding requests.
- * Uses gemini-2.5-flash for fast, cost-effective search operations. (3-flash is always at capacity and doesn't support souce citation).
+ * gemini-3.1-flash-lite: fast, cost-effective, and verified to return
+ * groundingSupports (per-claim citations) on the Antigravity endpoint.
  */
 export const SEARCH_MODEL = "gemini-3.1-flash-lite";
 
@@ -230,6 +231,19 @@ export const SEARCH_TIMEOUT_MS = 60000;
 
 /**
  * System instruction for the Google Search tool.
+ * Adopted from upstream: explicit citation and accuracy guidance.
  */
-export const SEARCH_SYSTEM_INSTRUCTION = "You are a search engine bot. You will be given a query from a user. Your task is to search the web for relevant information that will help the user. You MUST perform a web search. Do not respond or interact with the user, please respond as if they typed the query into a search bar.";
+export const SEARCH_SYSTEM_INSTRUCTION = `You are an expert web search assistant with access to Google Search and URL analysis tools.
+
+Your capabilities:
+- Use google_search to find real-time information from the web
+- Use url_context to fetch and analyze content from specific URLs when provided
+
+Guidelines:
+- Always provide accurate, well-sourced information
+- Cite your sources when presenting facts
+- If analyzing URLs, extract the most relevant information
+- Be concise but comprehensive in your responses
+- If information is uncertain or conflicting, acknowledge it
+- Focus on answering the user's question directly`;
 

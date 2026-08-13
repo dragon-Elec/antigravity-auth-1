@@ -5,7 +5,7 @@ vi.mock("./agy-transport", () => ({
 }));
 
 import { fetchWithAgyCliTransport } from "./agy-transport";
-import { executeSearch } from "./search";
+import { executeSearch, insertCitationMarkers, resolveSourceUrl } from "./search";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -15,6 +15,7 @@ function makeResponse(
     searchQueries?: string[];
     chunks?: Array<{ title: string; uri: string }>;
     urlMetadata?: Array<{ retrieved_url: string; url_retrieval_status: string }>;
+    supports?: Array<{ startIndex: number; endIndex: number; indices: number[] }>;
   } = {},
 ) {
   return {
@@ -26,6 +27,10 @@ function makeResponse(
           groundingMetadata: {
             webSearchQueries: opts.searchQueries ?? [],
             groundingChunks: (opts.chunks ?? []).map((c) => ({ web: c })),
+            groundingSupports: (opts.supports ?? []).map((s) => ({
+              segment: { startIndex: s.startIndex, endIndex: s.endIndex },
+              groundingChunkIndices: s.indices,
+            })),
           },
           urlContextMetadata: { url_metadata: opts.urlMetadata ?? [] },
         },
@@ -144,5 +149,120 @@ describe("executeSearch", () => {
     expect(body.requestId).toMatch(/^agent\/.+\/2$/);
     expect(body.userAgent).toBe("antigravity");
     expect(body.requestType).toBe("agent");
+  });
+
+  it("renders inline citation markers from groundingSupports", async () => {
+    mockAgyTransport(
+      makeResponse("Tokyo is hot and humid.", {
+        chunks: [{ title: "aqi.in", uri: "https://www.aqi.in/weather" }],
+        supports: [{ startIndex: 0, endIndex: 23, indices: [0] }],
+      }),
+    );
+    const result = await executeSearch({ query: "tokyo weather" }, "tok", "proj");
+    expect(result).toContain("Tokyo is hot and humid.[1]");
+    expect(result).toContain("### Sources");
+  });
+
+  it("does not double-cite when the model already emitted markers", async () => {
+    mockAgyTransport(
+      makeResponse("Tokyo is hot [1].", {
+        chunks: [{ title: "aqi.in", uri: "https://www.aqi.in/weather" }],
+        supports: [{ startIndex: 0, endIndex: 14, indices: [0] }],
+      }),
+    );
+    const result = await executeSearch({ query: "tokyo weather" }, "tok", "proj");
+    expect(result).toContain("Tokyo is hot [1].");
+    expect(result).not.toContain("[1][1]");
+  });
+
+  it("resolves grounding redirect URIs to canonical URLs in Sources", async () => {
+    const redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/abc123";
+    const fetchSpy = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue({ url: "https://www.real-site.example/article", ok: true } as Response);
+    mockAgyTransport(
+      makeResponse("answer", {
+        chunks: [{ title: "Real Site", uri: redirect }],
+      }),
+    );
+    const result = await executeSearch({ query: "q" }, "tok", "proj");
+    expect(fetchSpy).toHaveBeenCalledWith(redirect, expect.objectContaining({ redirect: "follow" }));
+    expect(result).toContain("https://www.real-site.example/article");
+    expect(result).not.toContain(redirect);
+  });
+});
+
+// ─── insertCitationMarkers ──────────────────────────────────────────────────────
+
+describe("insertCitationMarkers", () => {
+  it("inserts a marker at the segment end offset", () => {
+    expect(insertCitationMarkers("Tokyo is hot.", [{ segment: { startIndex: 0, endIndex: 13 }, groundingChunkIndices: [0] }]))
+      .toBe("Tokyo is hot.[1]");
+  });
+
+  it("maps multiple chunk indices to combined markers", () => {
+    expect(insertCitationMarkers("Tokyo is hot.", [{ segment: { startIndex: 0, endIndex: 13 }, groundingChunkIndices: [0, 2] }]))
+      .toBe("Tokyo is hot.[1][3]");
+  });
+
+  it("applies multiple supports without offset drift", () => {
+    const text = "First claim. Second claim.";
+    const supports = [
+      { segment: { startIndex: 0, endIndex: 12 }, groundingChunkIndices: [0] },
+      { segment: { startIndex: 13, endIndex: 26 }, groundingChunkIndices: [1] },
+    ];
+    expect(insertCitationMarkers(text, supports)).toBe("First claim.[1] Second claim.[2]");
+  });
+
+  it("preserves multibyte characters (character vs byte offsets)", () => {
+    const text = "日本語のテキストです。";
+    expect(insertCitationMarkers(text, [{ segment: { startIndex: 0, endIndex: 6 }, groundingChunkIndices: [0] }]))
+      .toBe("日本語のテキ[1]ストです。");
+  });
+
+  it("skips insertion when the text already contains self-citations", () => {
+    const text = "See [1] for details.";
+    expect(insertCitationMarkers(text, [{ segment: { startIndex: 0, endIndex: 7 }, groundingChunkIndices: [0] }]))
+      .toBe(text);
+  });
+
+  it("degrades gracefully on out-of-bounds segments", () => {
+    const text = "Short text.";
+    const supports = [
+      { segment: { startIndex: 0, endIndex: 99 }, groundingChunkIndices: [0] }, // beyond end
+      { segment: { startIndex: 5, endIndex: 2 }, groundingChunkIndices: [0] }, // inverted
+      { segment: { startIndex: -1, endIndex: 3 }, groundingChunkIndices: [0] }, // negative
+    ];
+    expect(insertCitationMarkers(text, supports)).toBe(text);
+  });
+
+  it("returns the text unchanged when supports are empty", () => {
+    expect(insertCitationMarkers("Plain text.", [])).toBe("Plain text.");
+  });
+});
+
+// ─── resolveSourceUrl ───────────────────────────────────────────────────────────
+
+describe("resolveSourceUrl", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("passes non-redirect URIs through without fetching", async () => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch");
+    await expect(resolveSourceUrl("https://example.com/page")).resolves.toBe("https://example.com/page");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("resolves redirect URIs to the canonical URL", async () => {
+    const redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/xyz";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue({ url: "https://canonical.example/a", ok: true } as Response);
+    await expect(resolveSourceUrl(redirect)).resolves.toBe("https://canonical.example/a");
+  });
+
+  it("falls back to the original URI when resolution fails", async () => {
+    const redirect = "https://vertexaisearch.cloud.google.com/grounding-api-redirect/xyz";
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("network down"));
+    await expect(resolveSourceUrl(redirect)).resolves.toBe(redirect);
   });
 });

@@ -49,7 +49,11 @@ import { startOAuthListener, type OAuthListener } from "./plugin/server";
 import { clearAccounts, loadAccounts, saveAccounts, saveAccountsReplace } from "./plugin/storage";
 import { AccountManager, type ModelFamily, parseRateLimitReason, calculateBackoffMs, computeSoftQuotaCacheTtlMs, resolveQuotaGroup } from "./plugin/accounts";
 import { createAutoUpdateCheckerHook } from "./hooks/auto-update-checker";
-import { buildAuthFromStoredAccount, detectAuthStorageDrift } from "./plugin/auth-drift";
+import {
+  buildAuthFromStoredAccount,
+  detectAuthStorageDrift,
+  reconcileAnonymousAuthAccount,
+} from "./plugin/auth-drift";
 import { createAuthDoctorReport, formatAuthDoctorReport } from "./plugin/auth-doctor";
 import { loadConfig, initRuntimeConfig, type AntigravityConfig } from "./plugin/config";
 import { createSessionRecoveryHook, getRecoverySuccessToast } from "./plugin/recovery";
@@ -103,6 +107,11 @@ function getCapacityBackoffDelay(consecutiveFailures: number): number {
 }
 const warmupAttemptedSessionIds = new Set<string>();
 const warmupSucceededSessionIds = new Set<string>();
+
+// Track if this plugin instance is running in a child session (subagent, background task)
+// Used to filter toasts based on toast_scope config
+let isChildSession = false;
+let childSessionParentID: string | undefined = undefined;
 
 const log = createLogger("plugin");
 
@@ -1452,8 +1461,12 @@ export const createAntigravityPlugin = (providerId: string) => async (
       }
 
       if (parentSessionId) {
+        isChildSession = true;
+        childSessionParentID = parentSessionId;
         log.debug("child-session-detected", { sessionId, parentID: parentSessionId });
       } else {
+        isChildSession = false;
+        childSessionParentID = undefined;
         const prevSummary = activeAccountManager?.getSessionSummary();
         if (prevSummary && (prevSummary.totalClaude > 0 || prevSummary.totalGemini > 0)) {
           log.debug("prev-session-quota-summary", {
@@ -1532,7 +1545,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
 
   // Create google_search tool with access to auth context
   const googleSearchTool = tool({
-    description: "Search the web using Google Search and analyze URLs. Returns real-time information from the internet with source citations. Use this when you need up-to-date information about current events, recent developments, or any topic that may have changed. You can also provide specific URLs to analyze. IMPORTANT: If the user mentions or provides any URLs in their query, you MUST extract those URLs and pass them in the 'urls' parameter for direct analysis.",
+    description: "Search the web using Google Search and analyze URLs. Returns real-time information from the internet with source citations. Use this when you need up-to-date information about current events, recent developments, or any topic that may have changed. You can also provide specific URLs to analyze. Sources are returned as resolved canonical URLs (grounding redirects are followed automatically). IMPORTANT: If the user mentions or provides any URLs in their query, you MUST extract those URLs and pass them in the 'urls' parameter for direct analysis.",
     args: {
       query: tool.schema.string().describe("The search query or question to answer using web search"),
       urls: tool.schema.array(tool.schema.string()).optional().describe("List of specific URLs to fetch and analyze. IMPORTANT: Always extract and include any URLs mentioned by the user in their query here."),
@@ -1697,12 +1710,60 @@ export const createAntigravityPlugin = (providerId: string) => async (
         return {};
       }
 
-      // Validate that stored accounts are in sync with OpenCode's auth
-      // If OpenCode's refresh token doesn't match any stored account, clear stale storage
-      const authParts = parseRefreshParts(auth.refresh);
-      const storedAccounts = await loadAccounts();
-      
-      // Note: AccountManager now ensures the current auth is always included in accounts
+      let storedAccounts = await loadAccounts();
+
+      const anonymousReconciliation = reconcileAnonymousAuthAccount(auth, storedAccounts);
+      if (anonymousReconciliation) {
+        await saveAccountsReplace(anonymousReconciliation.storage);
+        storedAccounts = anonymousReconciliation.storage;
+        auth = buildAuthFromStoredAccount(anonymousReconciliation.account);
+        try {
+          await client.auth.set({
+            path: { id: providerId },
+            body: {
+              type: "oauth",
+              refresh: auth.refresh,
+              access: auth.access ?? "",
+              expires: auth.expires ?? 0,
+            },
+          });
+          log.info("Removed anonymous resurrected account and rebound auth", {
+            email: anonymousReconciliation.account.email,
+          });
+        } catch (storeError) {
+          log.warn("Failed to rebind auth after removing anonymous account", {
+            error: String(storeError),
+          });
+        }
+      }
+
+      // The persisted account pool is authoritative. OpenCode stores one
+      // provider credential, so it can still point at an account removed from
+      // the pool. Rebind it to the persisted active account instead of letting
+      // AccountManager resurrect the removed token as an anonymous account.
+      const drift = detectAuthStorageDrift(auth, storedAccounts);
+      if (drift.status === "drifted" && drift.account) {
+        auth = buildAuthFromStoredAccount(drift.account);
+        try {
+          await client.auth.set({
+            path: { id: providerId },
+            body: {
+              type: "oauth",
+              refresh: auth.refresh,
+              access: auth.access ?? "",
+              expires: auth.expires ?? 0,
+            },
+          });
+          log.info("Rebound Antigravity OAuth auth to persisted account pool", {
+            reason: drift.reason,
+            email: drift.account.email,
+          });
+        } catch (storeError) {
+          log.warn("Failed to rebind Antigravity OAuth auth to account storage", {
+            error: String(storeError),
+          });
+        }
+      }
 
       const accountManager = await AccountManager.loadFromDisk(auth);
       activeAccountManager = accountManager;
@@ -2039,7 +2100,8 @@ export const createAntigravityPlugin = (providerId: string) => async (
             resetAllAccountsBlockedToasts();
 
             pushDebug(
-              `selected idx=${account.index} email=${account.email ?? ""} family=${family} accounts=${accountCount} strategy=${config.account_selection_strategy}`,
+              `selected idx=${account.index} email=${account.email ?? ""} family=${family} accounts=${accountCount} strategy=${config.account_selection_strategy}` +
+                ` quota=${account.cachedQuota?.[resolveQuotaGroup(family, model)]?.remainingFraction ?? "unknown"}`,
             );
 
             if (previousAccountIndex >= 0 && previousAccountIndex !== account.index) {
@@ -3310,6 +3372,7 @@ export const createAntigravityPlugin = (providerId: string) => async (
                         acc.cachedQuota = res.quota.groups;
                         acc.cachedPerModelQuota = res.quota.perModel;
                         acc.cachedQuotaUpdatedAt = Date.now();
+                        activeAccountManager?.updateQuotaCache(res.index, res.quota.groups);
                         storageUpdated = true;
                       }
                     }
@@ -3321,6 +3384,9 @@ export const createAntigravityPlugin = (providerId: string) => async (
                         cachedPerModelQuota: res.quota?.perModel,
                         cachedQuotaUpdatedAt: Date.now(),
                       };
+                      if (res.quota?.groups) {
+                        activeAccountManager?.updateQuotaCache(res.index, res.quota.groups);
+                      }
                       storageUpdated = true;
                     }
                   }
