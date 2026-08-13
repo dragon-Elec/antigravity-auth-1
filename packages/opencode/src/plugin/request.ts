@@ -28,7 +28,6 @@ import {
 import { createLogger } from "./logger";
 import {
   cleanJSONSchemaForAntigravity,
-  DEFAULT_THINKING_BUDGET,
   deepFilterThinkingBlocks,
   extractThinkingConfig,
   extractVariantThinkingConfig,
@@ -72,6 +71,12 @@ import {
 import { detectErrorType } from "./recovery";
 import { getSessionFingerprint, buildFingerprintHeaders, type Fingerprint } from "./fingerprint";
 import {
+  buildAgyAgentRequestMetadata,
+  createAgyRequestSessionContext,
+  orderAgyRequestPayloadInPlace,
+  type AgyRequestSessionContext,
+} from "./agy-request-metadata";
+import {
   appendGeminiDumpResponseText,
   createGeminiDumpResponseTransform,
   noteGeminiDumpResponse,
@@ -82,10 +87,12 @@ import type { GoogleSearchConfig } from "./transform/types";
 const log = createLogger("request");
 
 const PLUGIN_SESSION_ID = `-${crypto.randomUUID()}`;
+const DEFAULT_AGY_REQUEST_SESSION = createAgyRequestSessionContext("");
 
 const sessionDisplayedThinkingHashes = new Set<string>();
 
 const MIN_SIGNATURE_LENGTH = 50;
+const AGY_CLAUDE_THINKING_BUDGET = 1024;
 
 const ANTIGRAVITY_ENVELOPE_FIELD_ORDER = [
   "project",
@@ -94,19 +101,87 @@ const ANTIGRAVITY_ENVELOPE_FIELD_ORDER = [
   "model",
   "userAgent",
   "requestType",
-  "enabledCreditTypes",
 ] as const;
 
-function buildAntigravityRequestId(type: "agent" | "checkpoint" = "agent"): string {
-  if (type === "checkpoint") {
-    return `checkpoint/${crypto.randomUUID()}`;
+const OPENCODE_TITLE_PROMPT_PREFIX = "Generate a title for this conversation:"
+
+function getOpenCodeTitleSourceText(payload: Record<string, unknown>): string | undefined {
+  if (!Array.isArray(payload.contents)) {
+    return undefined
   }
-  return `agent/${crypto.randomUUID()}/${Date.now()}/${crypto.randomUUID()}/2`;
+
+  const texts = payload.contents.flatMap((content) => {
+    if (!content || typeof content !== "object") {
+      return []
+    }
+    const parts = (content as Record<string, unknown>).parts
+    if (!Array.isArray(parts)) {
+      return []
+    }
+    return parts.flatMap((part) =>
+      !!part && typeof part === "object" && typeof (part as Record<string, unknown>).text === "string"
+        ? [(part as Record<string, unknown>).text as string]
+        : []
+    )
+  })
+
+  const promptIndex = texts.findIndex((text) => text.startsWith(OPENCODE_TITLE_PROMPT_PREFIX))
+  return promptIndex >= 0 ? texts.slice(promptIndex + 1).find((text) => text.trim().length > 0) : undefined
+}
+
+function isOpenCodeTitleGenerationRequest(payload: Record<string, unknown>): boolean {
+  return getOpenCodeTitleSourceText(payload) !== undefined
+}
+
+function formatLocalImageTitle(sourceText: string): string {
+  const normalized = sourceText
+    .trim()
+    .replace(/^(["“])(.*)(["”])$/s, "$2")
+    .replace(/\s+/g, " ")
+  const characters = Array.from(normalized)
+  if (characters.length <= 50) {
+    return normalized || "Image generation"
+  }
+  return `${characters.slice(0, 47).join("").trimEnd()}...`
+}
+
+export function getImageModelLocalTitle(
+  input: RequestInfo,
+  init?: RequestInit,
+): string | undefined {
+  const url = fetchInputToUrl(input);
+  if (!/\/models\/[^/:]*(?:image|imagen)[^/:]*:streamGenerateContent/i.test(url)) {
+    return undefined;
+  }
+
+  const body = init?.body;
+  const bodyText = typeof body === "string"
+    ? body
+    : body instanceof Uint8Array
+      ? new TextDecoder().decode(body)
+      : "";
+  if (!bodyText) {
+    return undefined;
+  }
+
+  try {
+    const sourceText = getOpenCodeTitleSourceText(JSON.parse(bodyText) as Record<string, unknown>)
+    return sourceText === undefined ? undefined : formatLocalImageTitle(sourceText)
+  } catch {
+    return undefined;
+  }
 }
 
 function getAgyMaxOutputTokens(model: string): number | undefined {
   const lower = model.toLowerCase();
-  if (lower === "gemini-3.5-flash-low" || lower === "gemini-3.5-flash-extra-low" || lower === "gemini-3-flash-agent") {
+  if (
+    lower === "gemini-3.5-flash-low"
+    || lower === "gemini-3.5-flash-extra-low"
+    || lower === "gemini-3-flash-agent"
+    || lower === "gemini-3.6-flash-low"
+    || lower === "gemini-3.6-flash-medium"
+    || lower === "gemini-3.6-flash-high"
+  ) {
     return 65536;
   }
   if (lower === "gemini-3.1-pro-low" || lower === "gemini-pro-agent") {
@@ -114,6 +189,9 @@ function getAgyMaxOutputTokens(model: string): number | undefined {
   }
   if (lower === "claude-sonnet-4-6" || lower === "claude-opus-4-6-thinking") {
     return 64000;
+  }
+  if (lower === "gpt-oss-120b-medium") {
+    return 32768;
   }
   return undefined;
 }
@@ -176,9 +254,9 @@ const JSON_SCHEMA_TYPES = new Set(["boolean", "string", "number", "integer", "ar
 
 function thinkingSafeReplacer(key: string, value: unknown): unknown {
   if (key === "thinking" && typeof value === "object" && value !== null) {
-    // Preserve Schema objects in tool declarations (e.g., {type: "boolean"})
+    // Preserve tool schemas before and after Gemini uppercases their type.
     const rec = value as Record<string, unknown>
-    if (typeof rec.type === "string" && JSON_SCHEMA_TYPES.has(rec.type)) {
+    if (typeof rec.type === "string" && JSON_SCHEMA_TYPES.has(rec.type.toLowerCase())) {
       return value
     }
     // Flatten any non-string, non-Schema thinking to empty string
@@ -475,6 +553,85 @@ function isValidRequestPart(part: unknown): boolean {
     Object.prototype.hasOwnProperty.call(record, "codeExecutionResult") ||
     Object.prototype.hasOwnProperty.call(record, "thought")
   );
+}
+
+function stripCacheControlFromParts(parts: unknown): void {
+  if (!Array.isArray(parts)) {
+    return;
+  }
+
+  for (const part of parts) {
+    if (!part || typeof part !== "object" || Array.isArray(part)) {
+      continue;
+    }
+    const record = part as Record<string, unknown>;
+    delete record.cache_control;
+    delete record.cacheControl;
+  }
+}
+
+function stripUnsupportedAntigravityFields(payload: Record<string, unknown>): void {
+  delete payload.providerOptions;
+  delete payload.cached_content;
+  delete payload.cachedContent;
+  delete payload.cache_control;
+  delete payload.cacheControl;
+
+  const extraBody = payload.extra_body;
+  if (extraBody && typeof extraBody === "object" && !Array.isArray(extraBody)) {
+    const extraBodyRecord = extraBody as Record<string, unknown>;
+    delete extraBodyRecord.cached_content;
+    delete extraBodyRecord.cachedContent;
+    delete extraBodyRecord.cache_control;
+    delete extraBodyRecord.cacheControl;
+    if (Object.keys(extraBodyRecord).length === 0) {
+      delete payload.extra_body;
+    }
+  }
+
+  const stripContentParts = (items: unknown): void => {
+    if (!Array.isArray(items)) {
+      return;
+    }
+    for (const item of items) {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        continue;
+      }
+      const record = item as Record<string, unknown>;
+      stripCacheControlFromParts(record.parts);
+      stripCacheControlFromParts(record.content);
+    }
+  };
+
+  stripContentParts(payload.contents);
+  stripContentParts(payload.messages);
+
+  for (const instructionKey of ["systemInstruction", "system_instruction"] as const) {
+    const instruction = payload[instructionKey];
+    if (instruction && typeof instruction === "object" && !Array.isArray(instruction)) {
+      stripCacheControlFromParts((instruction as Record<string, unknown>).parts);
+    }
+  }
+}
+
+function configureAntigravityToolCalling(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.tools) || payload.tools.length === 0) {
+    delete payload.toolConfig;
+    return;
+  }
+
+  const toolConfig = payload.toolConfig && typeof payload.toolConfig === "object" && !Array.isArray(payload.toolConfig)
+    ? payload.toolConfig as Record<string, unknown>
+    : {};
+  const functionCallingConfig = toolConfig.functionCallingConfig &&
+    typeof toolConfig.functionCallingConfig === "object" &&
+    !Array.isArray(toolConfig.functionCallingConfig)
+    ? toolConfig.functionCallingConfig as Record<string, unknown>
+    : {};
+
+  functionCallingConfig.mode = "VALIDATED";
+  toolConfig.functionCallingConfig = functionCallingConfig;
+  payload.toolConfig = toolConfig;
 }
 
 function sanitizeRequestPayloadForAntigravity(payload: Record<string, unknown>): void {
@@ -916,6 +1073,10 @@ export interface PrepareRequestOptions {
   googleSearch?: GoogleSearchConfig;
   /** Per-account fingerprint for rate limit mitigation. Falls back to session fingerprint if not provided. */
   fingerprint?: Fingerprint;
+  /** Stable AGY wire identity scoped to the exact OpenCode session. */
+  agySession?: AgyRequestSessionContext;
+  /** Monotonic request timestamp allocated once and reused across endpoint retries. */
+  agyRequestTimestamp?: number;
 }
 
 export function prepareAntigravityRequest(
@@ -966,6 +1127,8 @@ export function prepareAntigravityRequest(
   headers.delete("x-api-key");
   headers.delete("x-goog-api-key");
   headers.delete("x-session-affinity");
+  headers.delete("x-session-id");
+  headers.delete("x-parent-session-id");
   // Strip x-goog-user-project header to prevent 403 auth/license conflicts.
   // This header is added by OpenCode/AI SDK and can force project-level checks
   // that are not required for Antigravity/Gemini CLI OAuth requests.
@@ -994,7 +1157,8 @@ export function prepareAntigravityRequest(
   const transformedUrl = `${baseEndpoint}/v1internal:${rawAction}${streaming ? "?alt=sse" : ""}`;
 
   const isClaude = isClaudeModel(resolved.actualModel);
-  const isClaudeThinking = isClaudeThinkingModel(resolved.actualModel);  const keepThinkingEnabled = getKeepThinking();
+  const isClaudeThinking = isClaudeThinkingModel(resolved.actualModel);
+  const keepThinkingEnabled = getKeepThinking();
 
   // Tier-based thinking configuration from model resolver (can be overridden by variant config)
   let tierThinkingBudget = resolved.thinkingBudget;
@@ -1018,9 +1182,6 @@ export function prepareAntigravityRequest(
         } as Record<string, unknown>;
 
         if (headerStyle === "antigravity") {
-          if (typeof wrappedBody.requestId !== "string" || !wrappedBody.requestId) {
-            wrappedBody.requestId = buildAntigravityRequestId("agent");
-          }
           if (typeof wrappedBody.userAgent !== "string" || !wrappedBody.userAgent) {
             wrappedBody.userAgent = "antigravity";
           }
@@ -1054,8 +1215,6 @@ export function prepareAntigravityRequest(
         }
 
         for (const req of requestObjects) {
-          // Use stable session ID for signature caching across multi-turn conversations
-          (req as any).sessionId = signatureSessionKey;
           stripInjectedDebugFromRequestPayload(req as Record<string, unknown>);
 
           if (isClaude) {
@@ -1075,6 +1234,12 @@ export function prepareAntigravityRequest(
 
             // Step 3: Apply tool pairing fixes (ID assignment, response matching, orphan recovery)
             applyToolPairingFixes(req as Record<string, unknown>, true);
+          }
+
+          if (headerStyle === "antigravity") {
+            sanitizeRequestPayloadForAntigravity(req);
+            stripUnsupportedAntigravityFields(req);
+            configureAntigravityToolCalling(req);
           }
         }
 
@@ -1112,9 +1277,39 @@ export function prepareAntigravityRequest(
           needsSignedThinkingWarmup = hasToolUse && !hasSignedThinking && !hasCachedThinking;
         }
 
+        const wireRequest = requestObjects.at(-1);
+        if (wireRequest) {
+          if (headerStyle === "antigravity") {
+            const metadata = buildAgyAgentRequestMetadata(
+              options?.agySession ?? DEFAULT_AGY_REQUEST_SESSION,
+              wireRequest,
+              effectiveModel,
+              options?.agyRequestTimestamp,
+            );
+            wrappedBody.requestId = metadata.requestId;
+            wireRequest.sessionId = metadata.sessionId;
+            wireRequest.labels = metadata.labels;
+            orderAgyRequestPayloadInPlace(wireRequest);
+          } else {
+            wireRequest.sessionId = signatureSessionKey;
+          }
+        }
+
         body = safeStringify(headerStyle === "antigravity" ? orderAntigravityEnvelope(wrappedBody) : wrappedBody);
       } else {
         const requestPayload: Record<string, unknown> = { ...parsedBody };
+        if (
+          headerStyle === "antigravity" &&
+          isImageGenerationModel(effectiveModel) &&
+          isOpenCodeTitleGenerationRequest(requestPayload)
+        ) {
+          // OpenCode runs title generation through the active model. Route that
+          // text-only helper call away from image generation to avoid consuming
+          // image quota and writing unrelated image files.
+          effectiveModel = "gemini-3.5-flash-low";
+          tierThinkingBudget = 4000;
+          tierThinkingLevel = undefined;
+        }
         const rawGenerationConfig = requestPayload.generationConfig as Record<string, unknown> | undefined;
         const extraBody = requestPayload.extra_body as Record<string, unknown> | undefined;
 
@@ -1125,6 +1320,9 @@ export function prepareAntigravityRequest(
         const isGemini3 = effectiveModel.toLowerCase().includes("gemini-3");
 
         log.debug(`[ThinkingResolution] rawModel=${rawModel} resolvedModel=${effectiveModel} resolvedTier=${tierThinkingLevel ?? "none"} variantLevel=${variantConfig?.thinkingLevel ?? "none"} variantBudget=${variantConfig?.thinkingBudget ?? "none"} providerOptions.google=${JSON.stringify((requestPayload.providerOptions as any)?.google ?? null)} generationConfig.thinkingConfig=${JSON.stringify((rawGenerationConfig as any)?.thinkingConfig ?? null)}`);
+        // providerOptions belongs to the host AI SDK and is only used above to
+        // resolve the requested variant. It is never part of the Google wire schema.
+        delete requestPayload.providerOptions;
 
         if (variantConfig?.thinkingLevel && isGemini3) {
           // Gemini 3 native format - use thinkingLevel directly
@@ -1151,21 +1349,6 @@ export function prepareAntigravityRequest(
             // Claude / Gemini 2.5 - use budget directly
             tierThinkingBudget = variantConfig.thinkingBudget;
             tierThinkingLevel = undefined;
-          }
-        }
-
-        if (isClaude) {
-          if (!requestPayload.toolConfig) {
-            requestPayload.toolConfig = {};
-          }
-          if (typeof requestPayload.toolConfig === "object" && requestPayload.toolConfig !== null) {
-            const toolConfig = requestPayload.toolConfig as Record<string, unknown>;
-            if (!toolConfig.functionCallingConfig) {
-              toolConfig.functionCallingConfig = {};
-            }
-            if (typeof toolConfig.functionCallingConfig === "object" && toolConfig.functionCallingConfig !== null) {
-              (toolConfig.functionCallingConfig as Record<string, unknown>).mode = "VALIDATED";
-            }
           }
         }
 
@@ -1299,28 +1482,30 @@ export function prepareAntigravityRequest(
           delete requestPayload.system_instruction;
         }
 
-        // Normalize cached_content → cachedContent (camelCase) but preserve the value.
-        // OpenCode uses cachedContent for prompt caching — deleting it busts cache.
-        const cachedContentFromExtra =
-          typeof requestPayload.extra_body === "object" && requestPayload.extra_body
-            ? (requestPayload.extra_body as Record<string, unknown>).cached_content ??
-            (requestPayload.extra_body as Record<string, unknown>).cachedContent
-            : undefined;
-        const cachedContent =
-          (requestPayload.cached_content as string | undefined) ??
-          (requestPayload.cachedContent as string | undefined) ??
-          (cachedContentFromExtra as string | undefined);
-        if (cachedContent) {
-          requestPayload.cachedContent = cachedContent;
-        }
+        if (headerStyle !== "antigravity") {
+          // Gemini CLI accepts explicit cachedContent references. Normalize its
+          // snake_case aliases only on that transport; agy relies on implicit
+          // prefix caching and does not send any of these fields.
+          const cachedContentFromExtra =
+            typeof requestPayload.extra_body === "object" && requestPayload.extra_body
+              ? (requestPayload.extra_body as Record<string, unknown>).cached_content ??
+                (requestPayload.extra_body as Record<string, unknown>).cachedContent
+              : undefined;
+          const cachedContent =
+            (requestPayload.cached_content as string | undefined) ??
+            (requestPayload.cachedContent as string | undefined) ??
+            (cachedContentFromExtra as string | undefined);
+          if (cachedContent) {
+            requestPayload.cachedContent = cachedContent;
+          }
 
-        // Only delete the snake_case duplicate — preserve camelCase
-        delete requestPayload.cached_content;
-        if (requestPayload.extra_body && typeof requestPayload.extra_body === "object") {
-          delete (requestPayload.extra_body as Record<string, unknown>).cached_content;
-          delete (requestPayload.extra_body as Record<string, unknown>).cachedContent;
-          if (Object.keys(requestPayload.extra_body as Record<string, unknown>).length === 0) {
-            delete requestPayload.extra_body;
+          delete requestPayload.cached_content;
+          if (requestPayload.extra_body && typeof requestPayload.extra_body === "object") {
+            delete (requestPayload.extra_body as Record<string, unknown>).cached_content;
+            delete (requestPayload.extra_body as Record<string, unknown>).cachedContent;
+            if (Object.keys(requestPayload.extra_body as Record<string, unknown>).length === 0) {
+              delete requestPayload.extra_body;
+            }
           }
         }
         // Normalize tools. For Claude models, keep full function declarations (names + schemas).
@@ -1658,6 +1843,10 @@ export function prepareAntigravityRequest(
 
         stripInjectedDebugFromRequestPayload(requestPayload);
         sanitizeRequestPayloadForAntigravity(requestPayload);
+        if (headerStyle === "antigravity") {
+          stripUnsupportedAntigravityFields(requestPayload);
+          configureAntigravityToolCalling(requestPayload);
+        }
         // Use the stable default project ID (never a per-request random one):
         // a fresh random project each request busts the prompt cache and
         // fragments server-side quota/session state. ensureProjectContext
@@ -1665,11 +1854,26 @@ export function prepareAntigravityRequest(
         const effectiveProjectId = projectId?.trim() || (headerStyle === "antigravity" ? ANTIGRAVITY_DEFAULT_PROJECT_ID : "");
         resolvedProjectId = effectiveProjectId;
 
-        // System instruction injection removed — CLIProxyAPI v6.9.x no longer injects it
+        // Keep internal signature-cache identity separate from AGY wire session metadata.
+        sessionId = signatureSessionKey;
+        const agyMetadata = headerStyle === "antigravity"
+          ? buildAgyAgentRequestMetadata(
+              options?.agySession ?? DEFAULT_AGY_REQUEST_SESSION,
+              requestPayload,
+              effectiveModel,
+              options?.agyRequestTimestamp,
+            )
+          : null;
+        requestPayload.sessionId = agyMetadata?.sessionId ?? signatureSessionKey;
+        if (agyMetadata) {
+          requestPayload.labels = agyMetadata.labels;
+          orderAgyRequestPayloadInPlace(requestPayload);
+        }
+
         const wrappedBody: Record<string, unknown> = headerStyle === "antigravity"
           ? {
               project: effectiveProjectId,
-              requestId: buildAntigravityRequestId("agent"),
+              requestId: agyMetadata!.requestId,
               request: requestPayload,
               model: effectiveModel,
               userAgent: "antigravity",
@@ -1680,11 +1884,6 @@ export function prepareAntigravityRequest(
               model: effectiveModel,
               request: requestPayload,
             };
-        if (wrappedBody.request && typeof wrappedBody.request === 'object') {
-          // Use stable session ID for signature caching across multi-turn conversations
-          sessionId = signatureSessionKey;
-          (wrappedBody.request as any).sessionId = signatureSessionKey;
-        }
 
         body = safeStringify(headerStyle === "antigravity" ? orderAntigravityEnvelope(wrappedBody) : wrappedBody);
       }
@@ -1767,27 +1966,49 @@ export function buildThinkingWarmupBody(
 
   const warmupPrompt = "Warmup request for thinking signature.";
 
+  const wireModel = typeof parsed.model === "string" ? parsed.model : "claude-sonnet-4-6";
+  const requestObjects: Record<string, unknown>[] = [];
   const updateRequest = (req: Record<string, unknown>) => {
     req.contents = [{ role: "user", parts: [{ text: warmupPrompt }] }];
     delete req.tools;
-    delete (req as any).toolConfig;
+    delete req.toolConfig;
 
     const generationConfig = (req.generationConfig ?? {}) as Record<string, unknown>;
     generationConfig.thinkingConfig = {
-      include_thoughts: true,
-      thinking_budget: DEFAULT_THINKING_BUDGET,
+      includeThoughts: true,
+      thinkingBudget: AGY_CLAUDE_THINKING_BUDGET,
     };
-    generationConfig.maxOutputTokens = computeClaudeMaxOutputTokens(DEFAULT_THINKING_BUDGET);
-    req.generationConfig = generationConfig;  };
+    generationConfig.maxOutputTokens = getAgyMaxOutputTokens(wireModel) ??
+      computeClaudeMaxOutputTokens(AGY_CLAUDE_THINKING_BUDGET);
+    req.generationConfig = generationConfig;
+    requestObjects.push(req);
+  };
 
   if (parsed.request && typeof parsed.request === "object") {
     updateRequest(parsed.request as Record<string, unknown>);
-    const nested = (parsed.request as any).request;
+    const nested = (parsed.request as Record<string, unknown>).request;
     if (nested && typeof nested === "object") {
       updateRequest(nested as Record<string, unknown>);
     }
   } else {
     updateRequest(parsed);
+  }
+
+  const wireRequest = requestObjects.at(-1);
+  if (wireRequest) {
+    const numericSessionId = typeof wireRequest.sessionId === "string"
+      ? wireRequest.sessionId
+      : DEFAULT_AGY_REQUEST_SESSION.numericSessionId;
+    const warmupSession: AgyRequestSessionContext = {
+      conversationId: crypto.randomUUID(),
+      trajectoryId: crypto.randomUUID(),
+      numericSessionId,
+    };
+    const metadata = buildAgyAgentRequestMetadata(warmupSession, wireRequest, wireModel);
+    parsed.requestId = metadata.requestId;
+    wireRequest.sessionId = metadata.sessionId;
+    wireRequest.labels = metadata.labels;
+    orderAgyRequestPayloadInPlace(wireRequest);
   }
 
   return safeStringify(parsed);

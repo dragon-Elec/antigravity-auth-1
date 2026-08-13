@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest"
 import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai"
 
-import { parseGeminiSse, updateUsage } from "./stream.ts"
+import {
+  finalizePiAntigravityRequest,
+  parseGeminiSse,
+  resolvePiAntigravityModel,
+  updateUsage,
+} from "./stream.ts"
 
 function fakeModel(): Model<Api> {
   return {
@@ -44,6 +49,75 @@ function sseResponse(frames: string[]): Response {
   })
   return new Response(body, { status: 200 })
 }
+
+describe("resolvePiAntigravityModel", () => {
+  const gemini36 = {
+    ...fakeModel(),
+    id: "antigravity-gemini-3.6-flash",
+    reasoning: true,
+  }
+
+  it.each([
+    ["low", "gemini-3.6-flash-low", 1000],
+    ["medium", "gemini-3.6-flash-medium", 4000],
+    ["high", "gemini-3.6-flash-high", 10000],
+  ] as const)("maps Pi %s thinking to the captured AGY route", (reasoning, actualModel, thinkingBudget) => {
+    expect(resolvePiAntigravityModel(gemini36, reasoning)).toMatchObject({
+      actualModel,
+      thinkingBudget,
+    })
+  })
+
+  it("clamps unsupported edge levels to live AGY tiers", () => {
+    expect(resolvePiAntigravityModel(gemini36, "minimal").actualModel).toBe("gemini-3.6-flash-low")
+    expect(resolvePiAntigravityModel(gemini36, "xhigh").actualModel).toBe("gemini-3.6-flash-high")
+  })
+})
+
+describe("finalizePiAntigravityRequest", () => {
+  it("adds AGY 1.1.5 session metadata and VALIDATED tool configuration", () => {
+    const request: Record<string, unknown> = {
+      generationConfig: { thinkingConfig: { thinkingBudget: 10_000 } },
+      tools: [{ functionDeclarations: [{ name: "read", parameters: { type: "OBJECT" } }] }],
+      systemInstruction: { parts: [{ text: "system" }] },
+      contents: [{ role: "user", parts: [{ text: "prompt" }] }],
+    }
+
+    const requestId = finalizePiAntigravityRequest(
+      request,
+      "gemini-3-flash-agent",
+      {
+        session: {
+          conversationId: "conversation-id",
+          trajectoryId: "trajectory-id",
+          numericSessionId: "-3750763034362895579",
+        },
+        timestamp: 1_784_285_195_116,
+      },
+    )
+
+    expect(requestId).toBe("agent/conversation-id/1784285195116/trajectory-id/2")
+    expect(request.toolConfig).toEqual({ functionCallingConfig: { mode: "VALIDATED" } })
+    expect(request.labels).toEqual({
+      last_step_index: "1",
+      model_enum: "MODEL_PLACEHOLDER_M84",
+      trajectory_id: "trajectory-id",
+      used_claude: "false",
+      used_claude_conservative: "false",
+      used_non_gemini_model: "false",
+    })
+    expect(request.sessionId).toBe("-3750763034362895579")
+    expect(Object.keys(request)).toEqual([
+      "contents",
+      "systemInstruction",
+      "tools",
+      "toolConfig",
+      "labels",
+      "generationConfig",
+      "sessionId",
+    ])
+  })
+})
 
 describe("parseGeminiSse", () => {
   it("parses and unwraps the Antigravity response envelope into chunks", async () => {

@@ -16,6 +16,7 @@ vi.mock("./storage", async (importOriginal) => {
 
 describe("AccountManager", () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     vi.useRealTimers();
     vi.stubGlobal("process", { ...process, pid: 0 });
   });
@@ -38,6 +39,88 @@ describe("AccountManager", () => {
     expect(manager.getAccountCount()).toBe(0);
   });
 
+  it("persists explicit ineligibility, rejects manual enable, and recovers only after a successful recheck", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const stored: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+      ],
+      activeIndex: 0,
+    };
+    const manager = new AccountManager(undefined, stored);
+
+    expect(manager.markAccountIneligible(0, "ACCOUNT_INELIGIBLE")).toBe(true);
+    expect(manager.getAccountsSnapshot()[0]).toMatchObject({
+      enabled: false,
+      accountIneligible: true,
+      accountIneligibleAt: 1_000,
+      accountIneligibleReason: "ACCOUNT_INELIGIBLE",
+      eligibilityStateUpdatedAt: 1_000,
+    });
+    expect(manager.setAccountEnabled(0, true)).toBe(false);
+
+    await manager.saveToDisk();
+    expect(vi.mocked(saveAccounts)).toHaveBeenCalledWith(expect.objectContaining({
+      accounts: [expect.objectContaining({
+        enabled: false,
+        accountIneligible: true,
+        eligibilityStateUpdatedAt: 1_000,
+      })],
+    }));
+
+    vi.setSystemTime(2_000);
+    expect(manager.clearAccountAccessBlocks(0, true)).toBe(true);
+    expect(manager.getAccountsSnapshot()[0]).toMatchObject({
+      enabled: true,
+      accountIneligible: false,
+      eligibilityStateUpdatedAt: 2_000,
+    });
+    await manager.saveToDisk();
+    vi.clearAllTimers();
+  });
+
+  it("keeps ineligible and verification-required states mutually exclusive", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const manager = new AccountManager(undefined, {
+      version: 4,
+      accounts: [
+        {
+          refreshToken: "r1",
+          projectId: "p1",
+          addedAt: 1,
+          lastUsed: 0,
+          verificationRequired: true,
+          verificationRequiredAt: 500,
+          verificationRequiredReason: "verify",
+          verificationUrl: "https://example.com/verify",
+        },
+      ],
+      activeIndex: 0,
+    });
+
+    manager.markAccountIneligible(0, "ACCOUNT_INELIGIBLE");
+    expect(manager.getAccountsSnapshot()[0]).toMatchObject({
+      verificationRequired: false,
+      accountIneligible: true,
+    });
+    expect(manager.getAccountsSnapshot()[0]?.verificationUrl).toBeUndefined();
+
+    vi.setSystemTime(2_000);
+    manager.markAccountVerificationRequired(0, "Verify again", "https://example.com/new");
+    expect(manager.getAccountsSnapshot()[0]).toMatchObject({
+      enabled: false,
+      verificationRequired: true,
+      verificationRequiredReason: "Verify again",
+      accountIneligible: false,
+      eligibilityStateUpdatedAt: 2_000,
+    });
+    expect(manager.getAccountsSnapshot()[0]?.accountIneligibleReason).toBeUndefined();
+    vi.clearAllTimers();
+  });
+
   it("returns current account when not rate-limited for family", () => {
     const stored: AccountStorageV4 = {
       version: 4,
@@ -55,6 +138,143 @@ describe("AccountManager", () => {
 
     expect(account).not.toBeNull();
     expect(account?.index).toBe(0);
+  });
+
+  it("pins round-robin selection per exact root session", () => {
+    const stored: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        { refreshToken: "r2", projectId: "p2", addedAt: 1, lastUsed: 0 },
+      ],
+      activeIndex: 0,
+    };
+    const manager = new AccountManager(undefined, stored);
+    const select = (id: string) => manager.getCurrentOrNextForFamily(
+      "gemini",
+      null,
+      "round-robin",
+      "antigravity",
+      false,
+      100,
+      600_000,
+      { id },
+    );
+
+    expect(select("session-a")?.index).toBe(0);
+    expect(select("session-a")?.index).toBe(0);
+    expect(select("session-b")?.index).toBe(1);
+    expect(select("session-b")?.index).toBe(1);
+  });
+
+  it.each(["sticky", "hybrid"] as const)(
+    "keeps %s selection pinned when another root session selects independently",
+    (strategy) => {
+      const stored: AccountStorageV4 = {
+        version: 4,
+        accounts: [
+          { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+          { refreshToken: "r2", projectId: "p2", addedAt: 1, lastUsed: 0 },
+        ],
+        activeIndex: 0,
+      };
+      const manager = new AccountManager(undefined, stored);
+      const select = (id: string) => manager.getCurrentOrNextForFamily(
+        "gemini",
+        null,
+        strategy,
+        "antigravity",
+        false,
+        100,
+        600_000,
+        { id },
+      );
+
+      const first = select("session-a");
+      select("session-b");
+      expect(select("session-a")?.index).toBe(first?.index);
+    },
+  );
+
+  it("isolates each child from its exact parent's pinned account", () => {
+    const stored: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        { refreshToken: "r2", projectId: "p2", addedAt: 1, lastUsed: 0 },
+      ],
+      activeIndex: 0,
+    };
+    const manager = new AccountManager(undefined, stored);
+    const select = (id: string, parentId: string | null = null) =>
+      manager.getCurrentOrNextForFamily(
+        "gemini",
+        null,
+        "round-robin",
+        "antigravity",
+        false,
+        100,
+        600_000,
+        { id, parentId },
+      );
+
+    expect(select("root-a")?.index).toBe(0);
+    expect(select("root-b")?.index).toBe(1);
+    expect(select("child-a", "root-a")?.index).toBe(1);
+    expect(select("child-b", "root-b")?.index).toBe(0);
+  });
+
+  it("lets a child reuse its parent's account when no alternative is usable", () => {
+    const stored: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+      ],
+      activeIndex: 0,
+    };
+    const manager = new AccountManager(undefined, stored);
+
+    expect(manager.getCurrentOrNextForFamily(
+      "gemini",
+      null,
+      "sticky",
+      "antigravity",
+      false,
+      100,
+      600_000,
+      { id: "root" },
+    )?.index).toBe(0);
+    expect(manager.getCurrentOrNextForFamily(
+      "gemini",
+      null,
+      "sticky",
+      "antigravity",
+      false,
+      100,
+      600_000,
+      { id: "child", parentId: "root" },
+    )?.index).toBe(0);
+  });
+
+  it("releases an exact session pin when its session is deleted", () => {
+    const stored: AccountStorageV4 = {
+      version: 4,
+      accounts: [
+        { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+        { refreshToken: "r2", projectId: "p2", addedAt: 1, lastUsed: 0 },
+      ],
+      activeIndex: 0,
+    };
+    const manager = new AccountManager(undefined, stored);
+    const identity = { id: "session-a" };
+
+    expect(manager.getCurrentOrNextForFamily(
+      "gemini", null, "round-robin", "antigravity", false, 100, 600_000, identity,
+    )?.index).toBe(0);
+    manager.deleteSessionState(identity.id);
+    expect(manager.getCurrentOrNextForFamily(
+      "gemini", null, "round-robin", "antigravity", false, 100, 600_000, identity,
+    )?.index).toBe(1);
   });
 
   it("switches to next account when current is rate-limited for family", () => {
@@ -1700,6 +1920,40 @@ describe("AccountManager", () => {
       expect(account?.parts.refreshToken).toBe("r1");
     });
 
+    it("never applies soft quota protection when only one account is enabled", () => {
+      const stored: AccountStorageV4 = {
+        version: 4,
+        accounts: [
+          { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+          { refreshToken: "disabled", projectId: "p2", addedAt: 2, lastUsed: 0, enabled: false },
+        ],
+        activeIndex: 0,
+      };
+
+      for (const strategy of ["sticky", "round-robin", "hybrid"] as const) {
+        const manager = new AccountManager(undefined, stored);
+        manager.updateQuotaCache(0, {
+          claude: {
+            remainingFraction: 0.01,
+            resetTime: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+            modelCount: 1,
+          },
+        });
+
+        const account = manager.getCurrentOrNextForFamily(
+          "claude",
+          null,
+          strategy,
+          "antigravity",
+          false,
+          80,
+        );
+        expect(account?.parts.refreshToken).toBe("r1");
+        expect(manager.areAllAccountsOverSoftQuota("claude", 80, 10 * 60 * 1000)).toBe(false);
+        expect(manager.getMinWaitTimeForSoftQuota("claude", 80, 10 * 60 * 1000)).toBe(0);
+      }
+    });
+
     it("threshold of 100 disables soft quota protection", () => {
       const stored: AccountStorageV4 = {
         version: 4,
@@ -1842,17 +2096,19 @@ describe("AccountManager", () => {
       expect(waitMs).toBe(0);
     });
 
-    it("returns null when no resetTime available", () => {
+    it("returns null when no resetTime is available for a protected multi-account pool", () => {
       const stored: AccountStorageV4 = {
         version: 4,
         accounts: [
           { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+          { refreshToken: "r2", projectId: "p2", addedAt: 2, lastUsed: 0 },
         ],
         activeIndex: 0,
       };
 
       const manager = new AccountManager(undefined, stored);
       manager.updateQuotaCache(0, { claude: { remainingFraction: 0.05, modelCount: 1 } });
+      manager.updateQuotaCache(1, { claude: { remainingFraction: 0.05, modelCount: 1 } });
 
       const waitMs = manager.getMinWaitTimeForSoftQuota("claude", 90, 10 * 60 * 1000);
       expect(waitMs).toBeNull();
@@ -1866,6 +2122,7 @@ describe("AccountManager", () => {
         version: 4,
         accounts: [
           { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+          { refreshToken: "r2", projectId: "p2", addedAt: 2, lastUsed: 0 },
         ],
         activeIndex: 0,
       };
@@ -1877,6 +2134,13 @@ describe("AccountManager", () => {
           resetTime: "2026-01-28T15:00:00Z",
           modelCount: 1 
         } 
+      });
+      manager.updateQuotaCache(1, {
+        claude: {
+          remainingFraction: 0.05,
+          resetTime: "2026-01-28T15:00:00Z",
+          modelCount: 1,
+        },
       });
 
       const waitMs = manager.getMinWaitTimeForSoftQuota("claude", 90, 10 * 60 * 1000);
@@ -1893,6 +2157,7 @@ describe("AccountManager", () => {
         version: 4,
         accounts: [
           { refreshToken: "r1", projectId: "p1", addedAt: 1, lastUsed: 0 },
+          { refreshToken: "r2", projectId: "p2", addedAt: 2, lastUsed: 0 },
         ],
         activeIndex: 0,
       };
@@ -1904,6 +2169,13 @@ describe("AccountManager", () => {
           resetTime: "2026-01-28T15:00:00Z",
           modelCount: 1 
         } 
+      });
+      manager.updateQuotaCache(1, {
+        claude: {
+          remainingFraction: 0.05,
+          resetTime: "2026-01-28T15:00:00Z",
+          modelCount: 1,
+        },
       });
 
       const waitMs = manager.getMinWaitTimeForSoftQuota("claude", 90, 10 * 60 * 1000);

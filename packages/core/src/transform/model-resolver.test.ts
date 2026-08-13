@@ -69,6 +69,22 @@ describe("resolveModelWithTier", () => {
     });
   });
 
+  describe("Gemini 3.6 Flash Antigravity routes", () => {
+    it.each([
+      ["antigravity-gemini-3.6-flash", "gemini-3.6-flash-medium", 4000, "medium"],
+      ["antigravity-gemini-3.6-flash-low", "gemini-3.6-flash-low", 1000, "low"],
+      ["antigravity-gemini-3.6-flash-medium", "gemini-3.6-flash-medium", 4000, "medium"],
+      ["antigravity-gemini-3.6-flash-high", "gemini-3.6-flash-high", 10000, "high"],
+    ])("maps %s to the captured AGY route", (requestedModel, actualModel, thinkingBudget, tier) => {
+      const result = resolveModelWithTier(requestedModel);
+      expect(result.actualModel).toBe(actualModel);
+      expect(result.thinkingBudget).toBe(thinkingBudget);
+      expect(result.thinkingLevel).toBeUndefined();
+      expect(result.tier).toBe(tier);
+      expect(result.quotaPreference).toBe("antigravity");
+    });
+  });
+
   describe("All Gemini models default to antigravity quota", () => {
     it("gemini-2.5-flash defaults to antigravity", () => {
       const result = resolveModelWithTier("gemini-2.5-flash");
@@ -177,7 +193,8 @@ describe("resolveModelWithTier", () => {
       expect(result.isThinkingModel).toBe(true);
       expect(result.thinkingBudget).toBe(1024);
       expect(result.quotaPreference).toBe("antigravity");
-    });  });
+    });
+  });
 
   describe("Image models", () => {
     it("marks antigravity-gemini-3-pro-image as explicit quota", () => {
@@ -194,6 +211,32 @@ describe("resolveModelWithTier", () => {
       expect(result.isImageModel).toBe(true);
       expect(result.explicitQuota).toBe(true);
       expect(result.quotaPreference).toBe("antigravity");
+    });
+
+    it("resolves the live Gemini 3.1 Flash Image route without thinking", () => {
+      expect(resolveModelWithTier("antigravity-gemini-3.1-flash-image")).toMatchObject({
+        actualModel: "gemini-3.1-flash-image",
+        isThinkingModel: false,
+        isImageModel: true,
+        quotaPreference: "antigravity",
+        explicitQuota: true,
+      });
+    });
+  });
+
+  describe("GPT-OSS", () => {
+    it("resolves the only live GPT-OSS route with its captured thinking budget", () => {
+      expect(resolveModelWithTier("antigravity-gpt-oss-120b-medium")).toMatchObject({
+        actualModel: "gpt-oss-120b-medium",
+        thinkingBudget: 8192,
+        isThinkingModel: true,
+        quotaPreference: "antigravity",
+        explicitQuota: true,
+      });
+    });
+
+    it("maps the short GPT-OSS alias to the medium route", () => {
+      expect(resolveModelWithTier("antigravity-gpt-oss-120b").actualModel).toBe("gpt-oss-120b-medium");
     });
   });
 });
@@ -311,6 +354,14 @@ describe("Issue #103: resolveModelForHeaderStyle", () => {
     it("maps gemini-3.5-flash to the captured agy medium Antigravity model", () => {
       const result = resolveModelForHeaderStyle("gemini-3.5-flash", "antigravity");
       expect(result.actualModel).toBe("gemini-3.5-flash-low");
+      expect(result.thinkingBudget).toBe(4000);
+      expect(result.thinkingLevel).toBeUndefined();
+      expect(result.quotaPreference).toBe("antigravity");
+    });
+
+    it("maps gemini-3.6-flash to the captured agy medium Antigravity model", () => {
+      const result = resolveModelForHeaderStyle("gemini-3.6-flash", "antigravity");
+      expect(result.actualModel).toBe("gemini-3.6-flash-medium");
       expect(result.thinkingBudget).toBe(4000);
       expect(result.thinkingLevel).toBeUndefined();
       expect(result.quotaPreference).toBe("antigravity");

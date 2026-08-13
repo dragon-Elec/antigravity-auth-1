@@ -1,9 +1,13 @@
 import {
   ANTIGRAVITY_ENDPOINT,
+  AgyRequestSessionStore,
+  buildAgyAgentRequestMetadata,
   buildAntigravityHarnessUserAgent,
   ensureProjectContext,
   fetchWithAgyCliTransport,
+  orderAgyRequestPayloadInPlace,
   resolveModelForHeaderStyle,
+  type AgyRequestScope,
 } from "@cortexkit/antigravity-auth-core"
 import {
   type Api,
@@ -16,6 +20,7 @@ import {
   type SimpleStreamOptions,
   type StopReason,
   type TextContent,
+  type ThinkingLevel,
   type ToolCall,
 } from "@earendil-works/pi-ai"
 
@@ -23,6 +28,8 @@ import { buildGeminiRequest } from "./convert.ts"
 import { getPackedRefresh } from "./credential-cache.ts"
 
 const STREAM_ACTION = "streamGenerateContent"
+const FALLBACK_SESSION_KEY = "__default__"
+const requestSessions = new AgyRequestSessionStore("")
 
 function mapFinishReason(reason: string | null | undefined): StopReason {
   switch (reason) {
@@ -154,8 +161,53 @@ export async function* parseGeminiSse(response: Response): AsyncGenerator<Gemini
   }
 }
 
-function buildRequestId(): string {
-  return `agent/${crypto.randomUUID()}/${Date.now()}/${crypto.randomUUID()}/2`
+function getRequestSessionKey(context: Context, options?: SimpleStreamOptions): string {
+  if (options?.sessionId) {
+    return options.sessionId
+  }
+  const firstTimestamp = context.messages[0]?.timestamp
+  return firstTimestamp !== undefined ? `message:${firstTimestamp}` : FALLBACK_SESSION_KEY
+}
+
+export function finalizePiAntigravityRequest(
+  request: Record<string, unknown>,
+  wireModel: string,
+  scope: AgyRequestScope,
+): string {
+  if (Array.isArray(request.tools) && request.tools.length > 0) {
+    request.toolConfig = { functionCallingConfig: { mode: "VALIDATED" } }
+  }
+
+  const metadata = buildAgyAgentRequestMetadata(
+    scope.session,
+    request,
+    wireModel,
+    scope.timestamp,
+  )
+  request.labels = metadata.labels
+  request.sessionId = metadata.sessionId
+  orderAgyRequestPayloadInPlace(request)
+  return metadata.requestId
+}
+
+export function resolvePiAntigravityModel(model: Model<Api>, reasoning?: ThinkingLevel) {
+  const lower = model.id.toLowerCase()
+  const supportsAgyTiers = model.reasoning && (
+    lower.includes("gemini-3")
+    || (lower.includes("claude") && lower.includes("thinking"))
+  )
+
+  if (!supportsAgyTiers || !reasoning) {
+    return resolveModelForHeaderStyle(model.id, "antigravity")
+  }
+
+  const tier = reasoning === "minimal"
+    ? "low"
+    : reasoning === "xhigh"
+      ? "high"
+      : reasoning
+  const baseModel = model.id.replace(/-(minimal|low|medium|high|xhigh)$/i, "")
+  return resolveModelForHeaderStyle(`${baseModel}-${tier}`, "antigravity")
 }
 
 async function sendAntigravityRequest(options: {
@@ -164,7 +216,7 @@ async function sendAntigravityRequest(options: {
   streamOptions?: SimpleStreamOptions
   accessToken: string
 }): Promise<Response> {
-  const resolved = resolveModelForHeaderStyle(options.model.id, "antigravity")
+  const resolved = resolvePiAntigravityModel(options.model, options.streamOptions?.reasoning)
   const wireModel = resolved.actualModel
 
   // Recover the packed refresh (refreshToken|projectId|managedProjectId) that
@@ -203,9 +255,14 @@ async function sendAntigravityRequest(options: {
     request.generationConfig = generationConfig
   }
 
+  const requestScope = requestSessions.beginRequest(
+    getRequestSessionKey(options.context, options.streamOptions),
+  )
+  const requestId = finalizePiAntigravityRequest(request, wireModel, requestScope)
+
   const envelope = {
     project: projectContext.effectiveProjectId,
-    requestId: buildRequestId(),
+    requestId,
     request,
     model: wireModel,
     userAgent: "antigravity",

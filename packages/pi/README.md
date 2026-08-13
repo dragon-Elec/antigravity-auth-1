@@ -11,7 +11,7 @@ Antigravity's endpoints.
 ## Install
 
 ```bash
-pi package add @cortexkit/pi-antigravity-auth
+pi install npm:@cortexkit/pi-antigravity-auth
 ```
 
 ## Login
@@ -28,12 +28,17 @@ callback URL (or authorization code) back into the prompt.
 The extension registers the Antigravity model catalog under the
 `google-antigravity` provider, including:
 
+- `antigravity-gemini-3.6-flash`
 - `antigravity-gemini-3.5-flash`
 - `antigravity-gemini-3.1-pro`
 - `antigravity-claude-sonnet-4-6-thinking`
 - `antigravity-claude-opus-4-6-thinking`
+- `antigravity-gpt-oss-120b-medium`
 
-Select a model with `/model` or `pi -m google-antigravity/antigravity-gemini-3.5-flash`.
+The image-generation model is currently OpenCode-only because Pi's provider event
+protocol does not expose image-output stream events.
+
+Select a model with `/model` or `pi -m google-antigravity/antigravity-gemini-3.6-flash`.
 
 ## Configuration
 
