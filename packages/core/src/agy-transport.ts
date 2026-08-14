@@ -186,7 +186,6 @@ async function connectViaProxy(
   timeoutMs: number,
   onDebug?: (message: string) => void,
 ): Promise<tls.TLSSocket> {
-  // @ts-expect-error - autoSelectFamily is supported in Node 20+ but may be missing in types.
   // Set to false to disable Happy Eyeballs. Google's DNS returns many IPs, which causes
   // Node's internalConnectMultiple to attach too many listeners to its internal AbortSignal,
   // triggering a MaxListenersExceededWarning that corrupts the TUI.
@@ -280,7 +279,6 @@ async function connectDirect(
   onDebug?: (message: string) => void,
 ): Promise<tls.TLSSocket> {
   return await new Promise<tls.TLSSocket>((resolve, reject) => {
-    // @ts-expect-error - autoSelectFamily is supported in Node 20+ but may be missing in types.
     // Set to false to disable Happy Eyeballs. Google's DNS returns many IPs, which causes
     // Node's internalConnectMultiple to attach too many listeners to its internal AbortSignal,
     // triggering a MaxListenersExceededWarning that corrupts the TUI.
