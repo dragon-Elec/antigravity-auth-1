@@ -42,7 +42,6 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "@openauthjs/openauth": "^0.4.3",
     "xdg-basedir": "^5.1.0",
     "zod": "^4.0.0"
   },

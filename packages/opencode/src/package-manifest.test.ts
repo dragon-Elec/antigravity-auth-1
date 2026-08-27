@@ -38,12 +38,14 @@ const PACKAGE_ROOT = resolve(fileURLToPath(import.meta.url), '../../')
 interface Manifest {
   dependencies?: Record<string, string>
   peerDependencies?: Record<string, string>
+  peerDependenciesMeta?: Record<string, { optional?: boolean }>
 }
 
 const readManifest = (path: string): Manifest =>
   JSON.parse(readFileSync(path, 'utf-8')) as Manifest
 
 const ourManifest = readManifest(join(PACKAGE_ROOT, 'package.json'))
+const coreManifest = readManifest(join(PACKAGE_ROOT, '../core/package.json'))
 
 /** Every range we publish, regardless of which field declares it. */
 const ourRanges: Record<string, string> = {
@@ -161,6 +163,23 @@ describe('published dependency ranges', () => {
     const range = ourRanges['@opencode-ai/plugin']
     expect(range).toBeDefined()
     expect(Bun.semver.satisfies(FUTURE_VERSION, range ?? '')).toBe(true)
+  })
+
+  it('does not install host-only or unused OAuth packages for the standalone CLI', () => {
+    for (const hostPackage of [
+      '@opencode-ai/plugin',
+      '@opentui/core',
+      '@opentui/keymap',
+      '@opentui/solid',
+      'solid-js',
+      'typescript',
+    ]) {
+      expect(ourManifest.peerDependenciesMeta?.[hostPackage]?.optional).toBe(
+        true,
+      )
+    }
+    expect(ourManifest.dependencies).not.toHaveProperty('@openauthjs/openauth')
+    expect(coreManifest.dependencies).not.toHaveProperty('@openauthjs/openauth')
   })
 
   it('the installed tree resolves one shared copy per host peer', () => {

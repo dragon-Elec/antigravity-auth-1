@@ -8,6 +8,7 @@ import {
   mock,
   spyOn,
 } from 'bun:test'
+import { createHash } from 'node:crypto'
 
 import {
   ANTIGRAVITY_CLIENT_ID,
@@ -78,7 +79,10 @@ describe('Antigravity OAuth', () => {
       expect(url.searchParams.get('redirect_uri')).toBe(
         ANTIGRAVITY_REDIRECT_URI,
       )
-      expect(url.searchParams.get('code_challenge')).toBeTruthy()
+      expect(result.verifier).toMatch(/^[A-Za-z0-9_-]{43}$/)
+      expect(url.searchParams.get('code_challenge')).toBe(
+        createHash('sha256').update(result.verifier).digest('base64url'),
+      )
       expect(url.searchParams.get('code_challenge_method')).toBe('S256')
       expect(url.searchParams.get('access_type')).toBe('offline')
       expect(url.searchParams.get('prompt')).toBe('consent')

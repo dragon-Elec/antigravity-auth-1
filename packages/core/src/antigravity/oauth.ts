@@ -1,4 +1,4 @@
-import { generatePKCE } from '@openauthjs/openauth/pkce'
+import { createHash, randomBytes } from 'node:crypto'
 import { fetchWithAgyCliTransport } from '../agy-transport.ts'
 import { calculateTokenExpiry } from '../auth.ts'
 import {
@@ -22,6 +22,14 @@ const log = createLogger('oauth')
 interface PkcePair {
   challenge: string
   verifier: string
+}
+
+function generatePkcePair(): PkcePair {
+  const verifier = randomBytes(32).toString('base64url')
+  return {
+    verifier,
+    challenge: createHash('sha256').update(verifier).digest('base64url'),
+  }
 }
 
 interface AntigravityAuthState {
@@ -150,7 +158,7 @@ function decodeState(state: string): AntigravityAuthState {
 export async function authorizeAntigravity(
   projectId = '',
 ): Promise<AntigravityAuthorization> {
-  const pkce = (await generatePKCE()) as PkcePair
+  const pkce = generatePkcePair()
 
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth')
   url.searchParams.set('client_id', ANTIGRAVITY_CLIENT_ID)
