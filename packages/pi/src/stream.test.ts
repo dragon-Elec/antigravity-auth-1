@@ -188,6 +188,23 @@ describe('resolvePiAntigravityModel', () => {
     })
   })
 
+  const gemini38 = {
+    ...fakeModel(),
+    id: 'antigravity-gemini-3.8-flash',
+    reasoning: true,
+  }
+
+  it.each([
+    ['low', 'gemini-3.8-flash-low', 1000],
+    ['medium', 'gemini-3.8-flash-medium', 4000],
+    ['high', 'gemini-3.8-flash-high', -1],
+  ] as const)('maps Pi 3.8 %s thinking to the captured AGY route', (reasoning, actualModel, thinkingBudget) => {
+    expect(resolvePiAntigravityModel(gemini38, reasoning)).toMatchObject({
+      actualModel,
+      thinkingBudget,
+    })
+  })
+
   it('clamps unsupported edge levels to live AGY tiers', () => {
     expect(resolvePiAntigravityModel(gemini36, 'minimal').actualModel).toBe(
       'gemini-3.6-flash-low',
@@ -199,7 +216,7 @@ describe('resolvePiAntigravityModel', () => {
 })
 
 describe('finalizePiAntigravityRequest', () => {
-  it('adds AGY 1.1.13 session metadata and VALIDATED tool configuration', () => {
+  it('adds AGY session metadata and VALIDATED tool configuration', () => {
     const request: Record<string, unknown> = {
       generationConfig: { thinkingConfig: { thinkingBudget: 10_000 } },
       tools: [
@@ -493,7 +510,34 @@ describe('streamCortexKitAntigravity', () => {
     })
     expect(body.request.labels.model_enum).toBe('MODEL_PLACEHOLDER_M298')
     expect(call?.[1]?.headers?.['User-Agent']).toContain(
-      'antigravity/cli/1.1.13',
+      'antigravity/cli/1.1.24',
+    )
+  })
+
+  it('sends the captured Gemini 3.8 high budget and model enum on the wire', async () => {
+    await runStream(
+      {
+        ...fakeModel('antigravity-gemini-3.8-flash'),
+        reasoning: true,
+      },
+      sseResponse([
+        'data: {"response":{"candidates":[{"content":{"parts":[{"text":"answer"}]}},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":2}}}\n\n',
+      ]),
+      'gemini-38-high-wire',
+      undefined,
+      'high',
+    )
+
+    const call = fetchWithAgyCliTransportMock.mock.calls.at(-1)
+    const body = JSON.parse(String(call?.[1]?.body))
+    expect(body.model).toBe('gemini-3.8-flash-high')
+    expect(body.request.generationConfig.thinkingConfig).toEqual({
+      includeThoughts: true,
+      thinkingBudget: -1,
+    })
+    expect(body.request.labels.model_enum).toBe('MODEL_PLACEHOLDER_M318')
+    expect(call?.[1]?.headers?.['User-Agent']).toContain(
+      'antigravity/cli/1.1.24',
     )
   })
 

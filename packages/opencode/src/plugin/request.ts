@@ -201,7 +201,10 @@ function getAgyMaxOutputTokens(model: string): number | undefined {
     lower === 'gemini-3.6-flash-high' ||
     lower === 'gemini-3.7-flash-low' ||
     lower === 'gemini-3.7-flash-medium' ||
-    lower === 'gemini-3.7-flash-high'
+    lower === 'gemini-3.7-flash-high' ||
+    lower === 'gemini-3.8-flash-low' ||
+    lower === 'gemini-3.8-flash-medium' ||
+    lower === 'gemini-3.8-flash-high'
   ) {
     return 65536
   }

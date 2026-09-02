@@ -28,6 +28,7 @@ callback URL (or authorization code) back into the prompt.
 The extension registers the Antigravity model catalog under the
 `google-antigravity` provider, including:
 
+- `antigravity-gemini-3.8-flash`
 - `antigravity-gemini-3.7-flash`
 - `antigravity-gemini-3.6-flash`
 - `antigravity-gemini-3.5-flash`
@@ -39,7 +40,7 @@ The extension registers the Antigravity model catalog under the
 The image-generation model is currently OpenCode-only because Pi's provider event
 protocol does not expose image-output stream events.
 
-Select a model with `/model` or `pi -m google-antigravity/antigravity-gemini-3.7-flash`.
+Select a model with `/model` or `pi -m google-antigravity/antigravity-gemini-3.8-flash`.
 
 ## Configuration
 

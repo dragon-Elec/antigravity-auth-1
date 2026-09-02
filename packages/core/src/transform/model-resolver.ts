@@ -10,6 +10,7 @@ import {
   getGemini35FlashGeminiCliFallbackModel,
   getGemini36FlashAntigravityModel,
   getGemini37FlashAntigravityModel,
+  getGemini38FlashAntigravityModel,
   getResolverAliasMap,
 } from '../model-registry.ts'
 import type {
@@ -140,19 +141,18 @@ function resolveGemini35FlashAntigravityModel(tier?: ThinkingTier): string {
   return getGemini35FlashAntigravityModel(tier)
 }
 
-function getAgyGeminiFlashThinkingBudget(tier?: ThinkingTier): number {
+function getAgyGeminiFlashThinkingBudget(
+  tier?: ThinkingTier,
+  highBudget = 10000,
+): number {
   switch (tier) {
     case 'low':
       return 1000
     case 'high':
-      return 10000
+      return highBudget
     default:
       return 4000
   }
-}
-
-function getAgyGemini37FlashThinkingBudget(tier?: ThinkingTier): number {
-  return tier === 'high' ? -1 : getAgyGeminiFlashThinkingBudget(tier)
 }
 
 function getAgyGemini31ProModel(tier?: ThinkingTier): string {
@@ -212,7 +212,7 @@ export function resolveModelWithTier(
   const skipAlias = isAntigravity && isGemini3
 
   // For older Antigravity Gemini 3 models without explicit tier, append the
-  // tier to the model id. Gemini 3.5, 3.6, and 3.7 Flash use live-catalog
+  // tier to the model id. Gemini 3.5, 3.6, 3.7, and 3.8 Flash use live-catalog
   // route maps with numeric thinking budgets instead.
   const isGemini3Pro = isGemini3ProModel(modelWithoutQuota)
   const isGemini3Flash = isGemini3FlashModel(modelWithoutQuota)
@@ -220,6 +220,7 @@ export function resolveModelWithTier(
   const isGemini35Flash = /^gemini-3\.5-flash/i.test(baseName)
   const isGemini36Flash = /^gemini-3\.6-flash/i.test(baseName)
   const isGemini37Flash = /^gemini-3\.7-flash/i.test(baseName)
+  const isGemini38Flash = /^gemini-3\.8-flash/i.test(baseName)
   const isGptOss120b = /^gpt-oss-120b(?:-medium)?$/i.test(baseName)
 
   if (isGemini31Pro && quotaPreference === 'antigravity') {
@@ -258,7 +259,18 @@ export function resolveModelWithTier(
   if (isGemini37Flash && quotaPreference === 'antigravity') {
     return {
       actualModel: getGemini37FlashAntigravityModel(tier ?? 'medium'),
-      thinkingBudget: getAgyGemini37FlashThinkingBudget(tier),
+      thinkingBudget: getAgyGeminiFlashThinkingBudget(tier, -1),
+      tier: tier ?? 'medium',
+      isThinkingModel: true,
+      quotaPreference,
+      explicitQuota,
+    }
+  }
+
+  if (isGemini38Flash && quotaPreference === 'antigravity') {
+    return {
+      actualModel: getGemini38FlashAntigravityModel(tier ?? 'medium'),
+      thinkingBudget: getAgyGeminiFlashThinkingBudget(tier, -1),
       tier: tier ?? 'medium',
       isThinkingModel: true,
       quotaPreference,

@@ -116,6 +116,7 @@ The model registry lives at `packages/core/src/model-registry.ts`; the OpenCode 
 
 | Model | Variants | Quota group |
 | --- | --- | --- |
+| `antigravity-gemini-3.8-flash` | `low`, `high` | `gemini-flash` |
 | `antigravity-gemini-3.7-flash` | `low`, `high` | `gemini-flash` |
 | `antigravity-gemini-3.6-flash` | `low`, `high` | `gemini-flash` |
 | `antigravity-gemini-3.5-flash` | `low`, `high` | `gemini-flash` |
@@ -125,7 +126,7 @@ The model registry lives at `packages/core/src/model-registry.ts`; the OpenCode 
 | `antigravity-claude-opus-4-6-thinking` | — | `claude` |
 | `antigravity-gpt-oss-120b-medium` | — | `gpt-oss` |
 
-> Gemini 3.5 Flash-Lite is not in the AGY 1.1.5 Antigravity or Gemini CLI quota catalogs, and Gemini 3.5 Flash Cyber is restricted to a limited-access CodeMender pilot — neither is exposed by this plugin.
+> Gemini 3.8 Flash Cyber is restricted to Fairwind trusted defenders and is absent from the AGY 1.1.24 model catalog, so it is not exposed by this plugin. Gemini 3.5 Flash-Lite is also absent from the AGY catalog, and Gemini 3.5 Flash Cyber remains restricted to a limited-access CodeMender pilot.
 
 ### Routing
 
