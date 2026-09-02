@@ -1,6 +1,6 @@
 # Architecture
 
-This document is the system-of-record for the `@cortexkit/antigravity-auth*` stack at the v2.0 parity refactor. It is written from the **final** source tree on the current `main` (`9a98a15`) — every cited symbol has a live line reference against the files that actually ship, not the prior single-file plugin that the refactor decomposed into `packages/opencode/src/plugin/index.ts` plus the slim `plugins/opencode/index.ts` barrel.
+This document is the system-of-record for the `@cortexkit/antigravity-auth*` stack at the v2.0 parity refactor. It is written from the **final** source tree on the current `main` (`8efa48b`) — every cited symbol has a live line reference against the files that actually ship, not the prior single-file plugin that the refactor decomposed into `packages/opencode/src/plugin/index.ts` plus the slim `packages/opencode/index.ts` barrel.
 
 ## System goals and boundaries
 
@@ -12,8 +12,8 @@ The stack solves three problems at the harness boundary:
 
 Boundaries that the refactor enforces explicitly:
 
-- **Core is harness-agnostic.** It only knows `fetch`, `node:fs`, `node:net`, and a `fetchAccountQuota` callback. It must not import `@opencode-ai/plugin` or `@earendil-works/pi-ai`. The corollary: every host runtime call is injected through `PluginDependencyOverrides` (`packages/opencode/src/plugin/dependencies.ts:1-204`).
-- **The TUI is read-only.** `packages/opencode/src/tui.tsx:1-533` and the `tui-compiled/` twin only import from `sidebar-state.ts`, `rpc/rpc-client.ts`, `rpc/rpc-dir.ts`, and the local `tui/` folder. OAuth tokens, account storage, the fetch interceptor — none of those run inside the render path.
+- **Core is harness-agnostic.** It only knows `fetch`, `node:fs`, `node:net`, and a `fetchAccountQuota` callback. It must not import `@opencode-ai/plugin` or `@earendil-works/pi-ai`. The corollary: every host runtime call is injected through `PluginDependencyOverrides` (`packages/opencode/src/plugin/dependencies.ts:1-212`).
+- **The TUI is read-only.** `packages/opencode/src/tui.tsx:1-1171` and the `tui-compiled/` twin only import from `sidebar-state.ts`, `rpc/rpc-client.ts`, `rpc/rpc-dir.ts`, `tui-preferences.ts`, and the local `tui/` folder. OAuth tokens, account storage, the fetch interceptor — none of those run inside the render path.
 - **The plugin is one process, two render domains.** The server-side plugin (host-supplied `client`) and the OpenTUI sidebar live in separate process contexts. Communication is the loopback HTTP RPC plus the on-disk sidebar snapshot; the plugin never imports `@opentui/solid`.
 
 ## Package and process topology
@@ -42,7 +42,7 @@ graph LR
   E2E --> Core
 ```
 
-`packages/opencode/package.json` exposes two `exports` subpaths that the host installer reads: `exports["."]` (the fetch interceptor / OAuth / quota controller) and `exports["./tui"]` (the OpenTUI sidebar). The host's `opencode plugin` installer writes a server entry to `opencode.json` and a TUI entry to `tui.json`; the host loads the two registrations independently. The Pi package's `pi.extensions` field (`packages/pi/package.json:34-38`) is the analogue. The core package has no peer dependencies on any host runtime; it only depends on Node built-ins and `@openauthjs/openauth`.
+`packages/opencode/package.json` exposes two `exports` subpaths that the host installer reads: `exports["."]` (the fetch interceptor / OAuth / quota controller) and `exports["./tui"]` (the OpenTUI sidebar). The host's `opencode plugin` installer writes a server entry to `opencode.json` and a TUI entry to `tui.json`; the host loads the two registrations independently. The Pi package's `pi.extensions` field (`packages/pi/package.json:34-38`) is the analogue. The core package has no peer dependencies on any host runtime; it only depends on Node built-ins, `xdg-basedir`, and `zod`.
 
 ### Process topology at runtime
 
@@ -87,21 +87,21 @@ The TUI loads the compiled bundle (`packages/opencode/src/tui/entry.mjs:30-38`) 
 | Layer | Module | Lines | Responsibility |
 | --- | --- | --- | --- |
 | OAuth | `antigravity/oauth.ts` | core | `authorizeAntigravity`, `exchangeAntigravity`, PKCE pack/unpack |
-| Token state | `auth.ts` | `packages/core/src/auth.ts:1-63` | `parseRefreshParts`, `formatRefreshParts`, expiry buffer |
+| Token state | `auth.ts` | `packages/core/src/auth.ts:1-62` | `parseRefreshParts`, `formatRefreshParts`, expiry buffer |
 | Transport | `agy-transport.ts` | `packages/core/src/agy-transport.ts:1-651` | TLS socket pool, chunked/gzip decode, header/idle timeouts |
 | Active timeout | `fetch-timeout.ts` | `packages/core/src/fetch-timeout.ts:1-54` | 15s header-only abort for `globalThis.fetch` callers |
-| Quota + planning | `quota-manager.ts` | `packages/core/src/quota-manager.ts:1-717` | Attributed fetch, exponential backoff, in-flight dedupe |
-| Account pool | `account-manager.ts` | `packages/core/src/account-manager.ts:1-2083` | Selection, rate-limit state, fingerprint, soft-quota |
+| Quota + planning | `quota-manager.ts` | `packages/core/src/quota-manager.ts:1-1085` | Attributed fetch, exponential backoff, in-flight dedupe |
+| Account pool | `account-manager.ts` | `packages/core/src/account-manager.ts:1-2249` | Selection, rate-limit state, fingerprint, soft-quota |
 | Rotation | `rotation.ts` | `packages/core/src/rotation.ts:1-593` | Health score, token bucket, hybrid LRU classifier |
-| Locking | `file-lock.ts` | `packages/core/src/file-lock.ts:1-532` | Renewable fenced file lock with eviction marker |
+| Locking | `file-lock.ts` | `packages/core/src/file-lock.ts:1-552` | Renewable fenced file lock with eviction marker |
 | Atomic file | `atomic-write.ts` | `packages/core/src/atomic-write.ts:1-52` | Temp + rename, 0o600, no copy fallback |
 | Fingerprint | `fingerprint.ts` | core | Per-account device fingerprint + history |
 | Project ctx | `project.ts` | core | `loadCodeAssist`, `ensureProjectContext` |
-| Session metadata | `agy-request-metadata.ts` | `packages/core/src/agy-request-metadata.ts:1-259` | ConversationId, trajectoryId, payload ordering |
+| Session metadata | `agy-request-metadata.ts` | `packages/core/src/agy-request-metadata.ts:1-293` | ConversationId, trajectoryId, payload ordering |
 | Constants | `constants.ts` | `packages/core/src/constants.ts:1-269` | Endpoints, scopes, headers, sentinel values |
 | Logger | `logger.ts` | core | `createLogger('module-name')` |
 
-The account storage round-trip is owned by `packages/core/src/account-storage.ts`, which the opencode adapter wraps in `packages/opencode/src/plugin/storage.ts:1-410` (callers from the opencode side land there because the core exports a `store` interface that the host fills in).
+The account storage round-trip is owned by `packages/core/src/account-storage.ts`, which the opencode adapter wraps in `packages/opencode/src/plugin/storage.ts:1-422` (callers from the opencode side land there because the core exports a `store` interface that the host fills in).
 
 ### Layer dependency rules
 
@@ -133,26 +133,29 @@ The dependency graph is acyclic. No layer reaches into `account-manager` from `a
 
 ### Composition root
 
-`packages/opencode/src/plugin/index.ts:75-287` is the single factory `createAntigravityPlugin(providerId, options)`. It is the only host-facing surface; the package barrel at `packages/opencode/index.ts:1-4` re-exports the two stable aliases `{AntigravityCLIOAuthPlugin, GoogleOAuthPlugin}` produced by binding the factory to `ANTIGRAVITY_PROVIDER_ID = 'google'` (`packages/core/src/constants.ts:178`).
+`packages/opencode/src/plugin/index.ts:122-503` is the single factory `createAntigravityPlugin(providerId, options)`. It is the only host-facing surface; the package barrel at `packages/opencode/index.ts:1-4` re-exports the two stable aliases `{AntigravityCLIOAuthPlugin, GoogleOAuthPlugin}` produced by binding the factory to `ANTIGRAVITY_PROVIDER_ID = 'google'` (`packages/core/src/constants.ts:178`).
 
 The factory wires one of every collaborator the host will ever need:
 
-1. `resolvePluginDependencies(options.dependencies)` (line 78) — replaces the legacy shared mutable globals with a per-instance dependency bag covering `fetchImpl`, `agyTransport`, `filesystemRoots`, `oauth`, and `clock`.
-2. `loadConfig(directory)` then `initRuntimeConfig(config)` (line 82-83) — the latter pushes the resolved config onto the `core` config singleton.
-3. `initHealthTracker` / `initTokenTracker` / `initDiskSignatureCache` (lines 88-111) — populate the global rotation trackers with the user-configured weights.
-4. `AgySessionRegistry` (line 113) — owns the per-workspace `AgyRequestSessionStore` from `packages/core/src/agy-request-metadata.ts:95-184`.
-5. `createPluginLifecycle({...})` (line 115) — the disposal root.
-6. `createOpenCodeQuotaManager` (line 126) — wraps the core `QuotaManager` with a `getAccountsForSidebar` closure so any quota refresh pushes the redacted sidebar snapshot.
-7. `createOperatorSettingsController` (line 149) — backs the `/antigravity-*` slash commands. Config writes go through the fenced-lock writer so a crash mid-write cannot corrupt the file.
-8. `createEventHandler`, `createSessionRecoveryHook`, `createAutoUpdateCheckerHook` (lines 161-174) — host lifecycle hooks.
-9. `createFetchInterceptor` (line 217) — the per-instance interceptor built from `dependencies.agyTransport` and `dependencies.fetchImpl`. A fresh `authLoader` invocation rebuilds the interceptor with the new `AccountManager` (`packages/opencode/src/plugin/auth-loader.ts:154-156`).
-10. `startRpcServer` (line 233) — the loopback HTTP server; the same factory call exposes `apply` (operator → plugin) and `drain` (plugin → TUI notifications) callbacks.
+1. `resolvePluginDependencies(options.dependencies)` (line 125) — replaces the legacy shared mutable globals with a per-instance dependency bag covering `fetchImpl`, `agyTransport`, `filesystemRoots`, `oauth`, and `clock`.
+2. `loadConfig(directory)` then `initRuntimeConfig(config)` (lines 129-130) — the latter pushes the resolved config onto the `core` config singleton.
+3. `initHealthTracker` / `initTokenTracker` / `initDiskSignatureCache` (lines 135-158) — populate the global rotation trackers with the user-configured weights.
+4. `AgySessionRegistry` (line 160) — owns the per-workspace `AgyRequestSessionStore` from `packages/core/src/agy-request-metadata.ts:95-184`.
+5. `createPluginLifecycle({...})` (line 162) — the disposal root.
+6. `createOpenCodeQuotaManager` (line 173) — wraps the core `QuotaManager` with a `getAccountsForSidebar` closure so any quota refresh pushes the redacted sidebar snapshot. Registered as a producer in lifecycle via `registerQuotaManagerProducer`.
+7. `BackgroundQuotaRefresh` (line 221) — when `config.background_quota_refresh` is true, runs a background poller timer for idle account quotas and captured tiers. Registered as a producer in lifecycle.
+8. `createOperatorSettingsController` (line 245) — backs the `/antigravity-*` slash commands. Config writes go through the fenced-lock writer so a crash mid-write cannot corrupt the file.
+9. `createEventHandler`, `createSessionRecoveryHook`, `createAutoUpdateCheckerHook` (lines 256-273) — host lifecycle hooks.
+10. `createCommandDataService` (line 276) — privacy-safe account data projection and quota refresh service backing slash-command dialogs.
+11. `createAccountAccessService` (line 361) and `createAccountCommandOAuthService` (line 399) — handle account verification and multi-account OAuth additions from slash commands.
+12. `createAuthLoader` (line 376) and `createFetchInterceptor` (line 384) — the auth loader that reloads the account manager and provisions a fresh interceptor on demand.
+13. `startRpcServer` (line 434) — the loopback HTTP server; the same factory call exposes `apply` (operator → plugin) and `drain` (plugin → TUI notifications) callbacks.
 
-The factory returns a `PluginResult` with `dispose`, `config`, `command.execute.before`, `event`, `tool`, and `auth` hooks (`packages/opencode/src/plugin/index.ts:265-286`). The host's `auth.loader` is the one piece of business logic that runs every model call.
+The factory returns a `PluginResult` with `dispose`, `config`, `command.execute.before`, `event`, `tool`, and `auth` hooks (`packages/opencode/src/plugin/index.ts:481-502`). The host's `auth.loader` is the one piece of business logic that runs every model call.
 
 ### Auth loader and the one active interceptor
 
-`packages/opencode/src/plugin/auth-loader.ts:61-196` is the function the host invokes on every `auth` call. Its job is to materialize the `AccountManager` from the current session's auth + the on-disk pool, then hand the host a `fetch` closure bound to a fresh interceptor.
+`packages/opencode/src/plugin/auth-loader.ts:102-345` is the function the host invokes on every `auth` call. Its job is to materialize the `AccountManager` from the current session's auth + the on-disk pool, then hand the host a `fetch` closure bound to a fresh interceptor.
 
 ```mermaid
 sequenceDiagram
@@ -181,26 +184,26 @@ sequenceDiagram
   Loader-->>Host: { apiKey: '', fetch: fetcher }
 ```
 
-The redaction in `setSidebarMachineState` (`packages/opencode/src/plugin/auth-loader.ts:161-172`) uses `buildSidebarMachineStateFromAccounts` from `packages/opencode/src/sidebar-state.ts:484-500` so the TUI's snapshot is the only authoritative signal that the account pool exists.
+The redaction in `setSidebarMachineState` (`packages/opencode/src/plugin/auth-loader.ts`) uses `buildSidebarMachineStateFromAccounts` from `packages/opencode/src/sidebar-state.ts:788-808` so the TUI's snapshot is the only authoritative signal that the account pool exists.
 
 ### Fetch interceptor
 
-`packages/opencode/src/plugin/fetch-interceptor.ts:1-2242` is the largest file in the tree. It owns the per-request retry/quota/routing pipeline. The outer loop at lines 518-... picks an account via `accountManager.getCurrentOrNextForFamily(...)` (line 616), then the inner loop at lines 1213-... walks the endpoint fallback list (`packages/core/src/constants.ts:46-49`) with per-endpoint capacity retry.
+`packages/opencode/src/plugin/fetch-interceptor.ts:1-2277` is the largest file in the tree. It owns the per-request retry/quota/routing pipeline. The outer loop at lines 550-... picks an account via `accountManager.getCurrentOrNextForFamily(...)` (line 645), then the inner loop at lines 1260-... walks the endpoint fallback list (`packages/core/src/constants.ts:46-49`) with per-endpoint capacity retry.
 
 Key gates in the request lifecycle:
 
-- `isGenerativeLanguageRequest(input)` (line 332) — any non-`generativelanguage.googleapis.com` URL passes through to the host fetch unchanged.
-- `accessTokenExpired(authRecord)` (`packages/core/src/auth.ts:40-45`) — refresh via `refreshAccessToken` (line 803) before the request goes out; on `invalid_grant` the account is removed and the pool is rewritten.
-- `ensureProjectContext(authRecord)` (line 925) — the most likely pre-flight failure; on rejection the account is cooled down via `markAccountCoolingDown` + `markRateLimited`.
-- `prepareAntigravityRequest` (line 1210) — full sanitization pass: `sanitizeCrossModelPayload`, Claude thinking-block stripping, prefix-stabilized tool caching, fingerprint header injection, request-metadata labels.
-- `transport(...)` (line 1011, 1059) — the only call site that uses the bounded `agyTransport` socket; non-Antigravity URL variants fall back to `upstreamFetch`.
-- `transformAntigravityResponse` (line 1016) — runs the streaming reverse transform. The streaming transformer at `packages/opencode/src/plugin/core/streaming/transformer.ts` captures SSE tokens, caches thinking signatures, and emits `usageMetadata` to the caller.
+- `isGenerativeLanguageRequest(input)` (line 350) — any non-`generativelanguage.googleapis.com` URL passes through to the host fetch unchanged.
+- `accessTokenExpired(authRecord)` (`packages/core/src/auth.ts:40-45`) — refresh via `refreshAccessToken` (line 859) before the request goes out; on `invalid_grant` the account is removed and the pool is rewritten.
+- `ensureProjectContext(authRecord)` (line 981) — the most likely pre-flight failure; on rejection the account is cooled down via `markAccountCoolingDown` + `markRateLimited`.
+- `prepareAntigravityRequest` (line 1266) — full sanitization pass: `sanitizeCrossModelPayload`, Claude thinking-block stripping, prefix-stabilized tool caching, fingerprint header injection, request-metadata labels.
+- `transport(...)` (line 1072) — the primary path that uses the bounded `agyTransport` socket; non-Antigravity URL variants fall back to `upstreamFetch`.
+- `transformAntigravityResponse` (line 1072, 1900) — runs the streaming reverse transform. The streaming transformer at `packages/opencode/src/plugin/core/streaming/transformer.ts` captures SSE tokens, caches thinking signatures, and emits `usageMetadata` to the caller.
 
 The `RetryState` at `packages/opencode/src/plugin/fetch/retry-state.ts` and `WarmupState` at `packages/opencode/src/plugin/fetch/warmup.ts` are per-interceptor singletons; `createFetchInterceptor` constructs them at line 261-262 so disposing the plugin releases every counter.
 
 ### Dependency seam
 
-`packages/opencode/src/plugin/dependencies.ts:1-204` defines the override surface. Production callers omit it; test/e2e callers pass `fetchImpl`, `agyTransport`, and `filesystemRoots` to redirect all outbound calls onto the mock server. The seam is the only reason the e2e workspace can run without touching the live Antigravity infrastructure (see **End-to-end data flows** below).
+`packages/opencode/src/plugin/dependencies.ts:1-212` defines the override surface. Production callers omit it; test/e2e callers pass `fetchImpl`, `agyTransport`, and `filesystemRoots` to redirect all outbound calls onto the mock server. The seam is the only reason the e2e workspace can run without touching the live Antigravity infrastructure (see **End-to-end data flows** below).
 
 ## OpenTUI process and trust boundary
 
@@ -211,9 +214,11 @@ The OpenTUI plugin is wired through the package's `exports["./tui"]` subpath (`p
 The two halves share a small amount of code through `packages/opencode/src/tui-compiled/` (the precompiled mirror) and the slim contract modules:
 
 - `packages/opencode/src/sidebar-state.ts` — the read seam in the TUI's compiled tree, the read+write seam in the server plugin (lines 1-39 document the split).
+- `packages/opencode/src/tui-preferences.ts` — shared preferences reader and file watcher for TUI settings (`tui-preferences.jsonc`).
 - `packages/opencode/src/rpc/protocol.ts` — wire types (`CommandModalName`, `ApplyRequest`, `ApplyResult`, `RpcNotification`).
 - `packages/opencode/src/rpc/rpc-client.ts` — the TUI's HTTP client.
 - `packages/opencode/src/rpc/rpc-dir.ts` — resolves the per-project directory the port file lives in.
+- `packages/opencode/src/plugin/command-data.ts` — local structural types (`CommandAccountRow`) for privacy-safe modal dialogs.
 
 The TUI imports **none** of the OAuth, account, or fetch interceptor modules. The compiler would let it (TypeScript has no runtime privilege check), but the import graph review at `packages/opencode/src/tui.tsx:1-22` documents the rule.
 
@@ -221,17 +226,17 @@ The TUI imports **none** of the OAuth, account, or fetch interceptor modules. Th
 
 `packages/opencode/src/tui.tsx` is a `TuiPlugin` that registers a `slots.sidebar_content` slot. The slot renders a `SidebarPanel` Solid component that:
 
-1. Polls `readSidebarState(props.stateFile)` every 2 seconds (`POLL_INTERVAL_MS = 2000`, line 50).
-2. Polls the RPC server's `/rpc/pending-notifications` endpoint every 500ms for any new slash-command dialog (line 132).
-3. Renders the per-account blocks: enabled badge, health bar, cooldown countdown, per-model quota bar (`<SidebarQuotaKey>` = `claude | gemini-pro | gemini-flash`, line 52).
-4. Renders the active session route (line 254-275) — one entry per session that has issued a request through the fetch interceptor.
-5. Surfaces a stale-routing indicator (`STALE_AFTER_MS = 15_000`, line 51) when the snapshot's `checkedAt` is older than the threshold or `routingAuthoritative` is false.
+1. Polls `readSidebarState(props.stateFile)` every 2 seconds (`POLL_INTERVAL_MS = 2000`, line 84).
+2. Polls the RPC server's `/rpc/pending-notifications` endpoint every 500ms for any new slash-command dialog.
+3. Renders the per-account blocks: enabled badge, health bar, cooldown countdown, per-model quota bar (`<SidebarQuotaKey>` = `gemini | non-gemini`, lines 130-137).
+4. Renders the active session route — one entry per session that has issued a request through the fetch interceptor.
+5. Surfaces a stale-routing indicator when `routingAuthoritative` is false.
 
-When a notification arrives, `openCommandDialogFromNotification` (line 495-531) rebuilds the dialog flow via `collectDialogFlow` and reuses the host's `DialogSelect` / `confirm` / `prompt` primitives from `tui/command-dialogs.tsx`. The result is a host-branded modal that the user can navigate with the keyboard.
+When a notification arrives, `openCommandDialog` (line 1138) rebuilds the dialog flow and reuses the host's `DialogSelect` / `confirm` / `prompt` primitives from `tui/command-dialogs.tsx`. The result is a host-branded modal that the user can navigate with the keyboard.
 
 ### File logger
 
-`packages/opencode/src/tui/file-logger.ts:1-138` writes logs to `<xdg-state>/cortexkit/antigravity-auth/tui.log` (mode 0o600, 1 MB tail-truncated). The file logger is the only place the TUI emits diagnostics; it never writes to stdout/stderr because the host owns the framebuffer.
+`packages/opencode/src/tui/file-logger.ts:1-145` writes logs to `<xdg-state>/cortexkit/antigravity-auth/tui.log` (mode 0o600, 1 MB tail-truncated). The file logger is the only place the TUI emits diagnostics; it never writes to stdout/stderr because the host owns the framebuffer.
 
 ### RPC protocol
 
@@ -241,22 +246,22 @@ When a notification arrives, `openCommandDialogFromNotification` (line 495-531) 
 - `RpcNotification` — `OpenDialogPayload & { id, sessionId? }` — the queued push.
 - `ApplyRequest` / `ApplyResult` — `{ command, arguments, sessionId? }` / `{ text, knobs }`.
 
-The server side is `packages/opencode/src/rpc/rpc-server.ts:1-300`:
+The server side is `packages/opencode/src/rpc/rpc-server.ts:1-309`:
 
 - `startRpcServer({ dir, apply, drain })` binds to `127.0.0.1:0` (line 87) so the OS picks a free port, generates a 32-byte hex bearer token (line 62), writes the port file via `writePortFile` (line 97), and returns `{ port, token, stop }`.
 - `handleRequest` (line 127-166) accepts `POST /rpc/apply` (server timeout 120s, `APPLY_TIMEOUT_MS`) and `POST /rpc/pending-notifications` (request timeout 2s, `REQUEST_TIMEOUT_MS`).
 - `isAuthorized` (line 168-177) uses `timingSafeEqual` after padding to a fixed length so callers with the wrong-length token cannot observe a timing side-channel.
 - `closeServer` resolves the in-flight keep-alive sockets via `closeAllConnections`.
 
-The client side is `packages/opencode/src/rpc/rpc-client.ts:1-76`. `createRpcClient(dir, expectedPid)` reads the port file via `discoverPortFile` (which skips dead pids) and posts JSON with `Authorization: Bearer <token>`. The default 2s timeout is enforced via `fetchWithActiveTimeout` from `packages/core/src/fetch-timeout.ts:28-54`.
+The client side is `packages/opencode/src/rpc/rpc-client.ts:1-102`. `createRpcClient(dir, expectedPid)` reads the port file via `discoverPortFile` (which skips dead pids) and posts JSON with `Authorization: Bearer <token>`. The default 2s timeout is enforced via `fetchWithActiveTimeout` from `packages/core/src/fetch-timeout.ts:28-54`.
 
-The notification queue is `packages/opencode/src/rpc/notifications.ts:1-62`. `pushNotification` enqueues with a monotonic id; `drainNotifications` returns anything newer than the caller's `lastReceivedId` for the requested session. `isTuiConnected` reflects whether the TUI polled within the last 5 seconds (`CONNECTION_TTL_MS`, line 4).
+The notification queue is `packages/opencode/src/rpc/notifications.ts:1-59`. `pushNotification` enqueues with a monotonic id; `drainNotifications` returns anything newer than the caller's `lastReceivedId` for the requested session. `isTuiConnected` reflects whether the TUI polled within the last 5 seconds (`CONNECTION_TTL_MS`, line 4).
 
 ### Port file discovery
 
-`packages/opencode/src/rpc/port-file.ts:27-127` writes `<dir>/port-<pid>.json` with `{ pid, port, token }` (mode 0o600, atomically via `renameSync` from a `.tmp` sibling). `discoverPortFile` walks every `port-*.json` in the directory, validates the JSON, deletes dead-pid entries, and returns the most recent live entry. The pid-scoped naming means a crashed OpenCode process never blocks a new one from binding.
+`packages/opencode/src/rpc/port-file.ts:27-143` writes `<dir>/port-<pid>.json` with `{ pid, port, token }` (mode 0o600, atomically via `renameSync` from a `.tmp` sibling). `discoverPortFile` walks every `port-*.json` in the directory, validates the JSON, deletes dead-pid entries, and returns the most recent live entry. The pid-scoped naming means a crashed OpenCode process never blocks a new one from binding.
 
-`packages/opencode/src/rpc/rpc-dir.ts:1-27` resolves the directory: `ANTIGRAVITY_AUTH_RPC_DIR` env var wins, otherwise `<XDG_STATE_HOME>/cortexkit/antigravity-auth/rpc/<sha256(directory)[:16]>` so multiple workspaces can coexist.
+`packages/opencode/src/rpc/rpc-dir.ts:1-24` resolves the directory: `ANTIGRAVITY_AUTH_RPC_DIR` env var wins, otherwise `<XDG_STATE_HOME>/cortexkit/antigravity-auth/rpc/<sha256(directory)[:16]>` so multiple workspaces can coexist.
 
 ## Pi extension
 
@@ -426,17 +431,17 @@ sequenceDiagram
   Note right of Lifecycle: only after the snapshot landed<br/>so the TUI's last frame is consistent
 ```
 
-The order is enforced by `createPluginLifecycle` — `drainSidebarWrites` runs before any registered disposable (`packages/opencode/src/plugin/lifecycle.ts:72-91`). The plugin's `dispose` therefore guarantees that the last sidebar write from `upsertSidebarActiveRouting` has hit disk before the host moves on.
+The order is enforced by `createPluginLifecycle` — `drainSidebarWrites` runs before any registered disposable (`packages/opencode/src/plugin/lifecycle.ts:95-123`). The plugin's `dispose` therefore guarantees that the last sidebar write from `upsertSidebarActiveRouting` has hit disk before the host moves on.
 
 ## Account persistence and concurrency
 
 ### Storage shape
 
-`packages/core/src/account-storage.ts` defines the on-disk shape: `AccountStorageV4` with a `version: 4`, `accounts[]`, `activeIndex`, `activeIndexByFamily: { claude, gemini }`. Each account carries `refreshToken`, `email`, `projectId`, `managedProjectId`, `addedAt`, `lastUsed`, `enabled`, `rateLimitResetTimes`, `coolingDownUntil`, `cooldownReason`, `fingerprint`, `fingerprintHistory`, `verificationRequired`, `accountIneligible`, `cachedQuota`, `cachedQuotaUpdatedAt`, `dailyRequestCounts`. The OpenCode adapter wraps this in `packages/opencode/src/plugin/storage.ts:1-410` which adds the on-disk path resolver and the `mutateAccountStorage` helper.
+`packages/core/src/account-storage.ts` defines the on-disk shape: `AccountStorageV4` with a `version: 4`, `accounts[]`, `activeIndex`, `activeIndexByFamily: { claude, gemini }`. Each account carries `refreshToken`, `email`, `projectId`, `managedProjectId`, `addedAt`, `lastUsed`, `enabled`, `rateLimitResetTimes`, `coolingDownUntil`, `cooldownReason`, `fingerprint`, `fingerprintHistory`, `verificationRequired`, `accountIneligible`, `cachedQuota`, `cachedQuotaUpdatedAt`, `dailyRequestCounts`. The OpenCode adapter wraps this in `packages/opencode/src/plugin/storage.ts:1-422` which adds the on-disk path resolver and the `mutateAccountStorage` helper.
 
 ### Why a custom lock instead of a third-party dependency
 
-The original lock implementation pulled in a third-party `flock`-style cross-process mutex. The refactor replaced it with a **`renovating fenced file lock`** (`packages/core/src/file-lock.ts:1-532`) because:
+The original lock implementation pulled in a third-party `flock`-style cross-process mutex. The refactor replaced it with a **`renovating fenced file lock`** (`packages/core/src/file-lock.ts:1-552`) because:
 
 1. **No external dependency.** `node:fs/promises` is enough; the entire mechanism is a `wx`-exclusive placement of a JSON blob and a `mkdir`+`writeFile` for the eviction marker.
 2. **Renewable.** The lock file at `${path}.${name}.lock` carries `{ ownerId, expiresAt }`. A `setInterval` (unref-ed) rewrites the expiration every `max(1000, floor(ttlMs / 3))` ms (line 365-460). A contender that loses its renewal just lets the lock expire.
@@ -451,23 +456,23 @@ The original lock implementation pulled in a third-party `flock`-style cross-pro
 
 ### Sidebar state merge
 
-`packages/opencode/src/sidebar-state.ts` is the most stateful writer. The merge seam (`mergeMachineState`, line 600-625) is deterministic:
+`packages/opencode/src/sidebar-state.ts` is the most stateful writer. The merge seam (`mergeMachineState`, lines 904-929) is deterministic:
 
 - **Stale writes are dropped.** If `next.checkedAt < existing.checkedAt`, the existing state is returned untouched (only `activeRouting` is pruned to evict expired entries).
 - **`routingAuthoritative` is sticky-true.** Once true, any later non-authoritative write preserves the `true` flag.
-- **`activeRouting` is merged independently and pruned** to the freshest 100 entries within 24h (`ACTIVE_ROUTING_MAX_AGE_MS`, `ACTIVE_ROUTING_MAX_ENTRIES`, line 118-120).
+- **`activeRouting` is merged independently and pruned** to the freshest 100 entries within 24h (`ACTIVE_ROUTING_MAX_AGE_MS`, `ACTIVE_ROUTING_MAX_ENTRIES`, lines 136-138).
 
-The `sidebarWriteChain` (line 506-517) is the in-process serialization: every writer appends to a single Promise chain so two concurrent `setSidebarMachineState` calls do not race through the lock acquisition. Failures never poison the chain (line 511-516).
+The `sidebarWriteChain` (lines 810-821) is the in-process serialization: every writer appends to a single Promise chain so two concurrent `setSidebarMachineState` calls do not race through the lock acquisition. Failures never poison the chain (lines 815-820).
 
 ### `drainSidebarWrites` semantics
 
-`packages/opencode/src/sidebar-state.ts:524-526` returns the chain's tail. The plugin lifecycle (`packages/opencode/src/plugin/lifecycle.ts:62-115`) drains it AFTER registered producers stop and BEFORE registered consumers are torn down, so a fetch-interceptor routing upsert that resolves during shutdown lands before the host closes the terminal framebuffer (see **Lifecycle and disposal** for the two-phase producer/consumer ordering).
+`packages/opencode/src/sidebar-state.ts:828-830` returns the chain's tail. The plugin lifecycle (`packages/opencode/src/plugin/lifecycle.ts:67-123`) drains it AFTER registered producers stop and BEFORE registered consumers are torn down, so a fetch-interceptor routing upsert that resolves during shutdown lands before the host closes the terminal framebuffer (see **Lifecycle and disposal** for the two-phase producer/consumer ordering).
 
 ## Quota, routing, and killswitch semantics
 
 ### Quota manager
 
-`packages/core/src/quota-manager.ts:1-717` is the harness-agnostic core. It exposes a `fetchAccountQuota` callback the host plugs in; the manager tracks per-account state (consecutive failures, backoffUntil, inflight promise, cached result) keyed by stable identity (`keyOf`, line 111-115) — email preferred, hash of refresh token as fallback.
+`packages/core/src/quota-manager.ts:1-1085` is the harness-agnostic core. It exposes a `fetchAccountQuota` callback the host plugs in; the manager tracks per-account state (consecutive failures, backoffUntil, inflight promise, cached result) keyed by stable identity (`keyOf`, line 111-115) — email preferred, hash of refresh token as fallback.
 
 | Behavior | Where |
 | --- | --- |
@@ -479,9 +484,21 @@ The `sidebarWriteChain` (line 506-517) is the in-process serialization: every wr
 
 The aggregated result is split into `quota` (Antigravity-headers) and `geminiCliQuota` (Gemini CLI headers) — they share the same account object but the UI exposes both because the user can pick header style.
 
+### Background quota refresh
+
+`packages/opencode/src/plugin/background-quota-refresh.ts:1-476` provides `BackgroundQuotaRefresh`, a background poller timer for idle accounts. It runs a jittered, `unref()`'d timer that periodically refreshes quota for all accounts and pushes ONE sidebar snapshot per tick.
+
+Three-layer cross-process deduplication:
+
+1. **Freshness gate:** Reads `checkedAt` from the on-disk sidebar state; skips quota work when it is fresher than `max(intervalMs - 60_000, floor(intervalMs / 2))`. The `/2` floor ensures the gate still fires at the 1-minute minimum interval.
+2. **Advisory fenced lock:** Optimization allowing a single process to do network work when multiple wake simultaneously (`acquireFencedFileLock`). Held locks skip the tick.
+3. **Fail closed on lock error:** Lock exceptions skip the tick and add jitter to the next interval without attempting uncoordinated claim files.
+
+The poller also resolves captured plan tier metadata for accounts with stale `capturedTierAt` via `makeTierLoader`. `BackgroundQuotaRefresh` is registered as a `'producer'` in `PluginLifecycle` so it is stopped and awaited BEFORE `drainSidebarWrites`.
+
 ### Selection algorithm
 
-`packages/core/src/account-manager.ts:getCurrentOrNextForFamily` (line 685-868) is the central dispatcher. Strategies:
+`packages/core/src/account-manager.ts:getCurrentOrNextForFamily` (lines 759-962) is the central dispatcher. Strategies:
 
 - **`sticky`** (default) — keep the current account until it goes unavailable; on unavailability, advance the cursor to the next account that is enabled, not rate-limited, not over the soft-quota threshold, and not cooling down.
 - **`round-robin`** — same as sticky but advances the cursor on every selection so a session rotates across accounts.
@@ -491,21 +508,21 @@ The `pidOffsetEnabled` flag (line 805-825) lets multi-session hosts distribute l
 
 ### Soft-quota protection
 
-`packages/core/src/account-manager.ts:isOverSoftQuotaThreshold` (line 230-258) reads the cached quota remaining-fraction. If the account's cached quota is older than `softQuotaCacheTtlMs` (computed via `computeSoftQuotaCacheTtlMs`, `packages/core/src/rotation.ts:90-101`), the soft-quota check is **skipped** — fresh quota data is a precondition.
+`packages/core/src/account-manager.ts:isOverSoftQuotaThreshold` (lines 279-307) reads the cached quota remaining-fraction. If the account's cached quota is older than `softQuotaCacheTtlMs` (computed via `computeSoftQuotaCacheTtlMs`, `packages/core/src/rotation.ts:90-101`), the soft-quota check is **skipped** — fresh quota data is a precondition.
 
-The protection is wedged to the single-account case: `getEffectiveSoftQuotaThreshold` (line 494-498) forces the threshold to 100 if there is only one enabled account. A user with no alternative rotation partner must not be blocked.
+The protection is wedged to the single-account case: `getEffectiveSoftQuotaThreshold` (lines 553-558) forces the threshold to 100 if there is only one enabled account. A user with no alternative rotation partner must not be blocked.
 
 ### Routing
 
 Two header styles: `antigravity` (Electron-style UA + `X-Goog-Api-Client` + `Client-Metadata`) and `gemini-cli` (`GeminiCLI/{}/{}/({}; {})` UA). Claude has only `antigravity`; Gemini has both. The resolver is `resolveHeaderRoutingDecision` (`packages/opencode/src/plugin/fetch-routing.ts`) and the fallback is `resolveQuotaFallbackHeaderStyle`. When the preferred style is rate-limited for the chosen account, the interceptor either switches account (if another account has the preferred style available) or flips to the alternate style.
 
-The per-call routing decision is read live from `operatorSettings.get().routing` (`packages/opencode/src/plugin/fetch-interceptor.ts:460-466`) so a `/antigravity-routing` slash command takes effect on the next dispatched call without a plugin restart.
+The per-call routing decision is read live from `operatorSettings?.get().routing` (`packages/opencode/src/plugin/fetch-interceptor.ts:478`) so a `/antigravity-routing` slash command takes effect on the next dispatched call without a plugin restart.
 
 ### Killswitch
 
-`packages/opencode/src/plugin/killswitch.ts:1-284` exposes `evaluateKillswitchForAccount` and `throwIfAllKilled`. The operator sets a `minimum_remaining_percent` per family/model; any account whose freshest quota falls below the threshold is excluded from selection. The killswitch **fails open on missing/stale quota** so a cold start cannot deadlock the pipeline.
+`packages/opencode/src/plugin/killswitch.ts:1-289` exposes `evaluateKillswitchForAccount` and `throwIfAllKilled`. The operator sets a `minimum_remaining_percent` per family/model; any account whose freshest quota falls below the threshold is excluded from selection. The killswitch **fails open on missing/stale quota** so a cold start cannot deadlock the pipeline.
 
-The evaluation is **model-aware**: when a `model` is passed in `KillswitchEvaluateOptions` (or `quotaModel` on `throwIfAllKilled`), `quotaGroupForModel` (`packages/opencode/src/plugin/killswitch.ts:69-86`) maps the model string to the single quota group it draws on — a `gemini-pro` request checks ONLY `gemini-pro`, not the max of pro+flash. Callers that omit `model` keep the family-max behavior. The fetch interceptor precomputes an `eligibleIndexes` Set once per request (`packages/opencode/src/plugin/fetch-interceptor.ts:551-579`) and re-uses it after core selection and after the quota-fallback re-selection so a long-running request cannot see a different answer than the pre-filter.
+The evaluation is **model-aware**: when a `model` is passed in `KillswitchEvaluateOptions` (or `quotaModel` on `throwIfAllKilled`), `quotaGroupForModel` (`packages/opencode/src/plugin/killswitch.ts:69-86`) maps the model string to the single quota group it draws on — a `gemini-pro` request checks ONLY `gemini-pro`, not the max of pro+flash. Callers that omit `model` keep the family-max behavior. The fetch interceptor precomputes an `eligibleIndexes` Set once per request (`packages/opencode/src/plugin/fetch-interceptor.ts:569-605`) and re-uses it after core selection and after the quota-fallback re-selection so a long-running request cannot see a different answer than the pre-filter.
 
 ## OAuth and token lifecycle
 
@@ -535,11 +552,11 @@ The evaluation is **model-aware**: when a `model` is passed in `KillswitchEvalua
 
 ### Outbound transform
 
-`packages/opencode/src/plugin/request.ts:1-2854` is the upstream of `prepareAntigravityRequest`. The pipeline:
+`packages/opencode/src/plugin/request.ts:1-2856` is the upstream of `prepareAntigravityRequest`. The pipeline:
 
 1. **Sanitize** — strip Claude thinking blocks (`packages/core/src/transform/claude.ts`), normalize cross-model payloads (`packages/core/src/transform/cross-model-sanitizer.ts`), apply `applyGeminiTransforms` / `applyClaudeTransforms` (`packages/core/src/transform/`) depending on the resolved model family.
-2. **Resolve** — `resolveModelWithTier` from `packages/core/src/transform/model-resolver.ts` maps the user-facing tag (`claude-sonnet-4-6`) to the Antigravity wire model and the header style.
-3. **Inject** — `buildAgyRequestMetadata` from `packages/core/src/agy-request-metadata.ts:231-259` produces the `labels` block (`last_step_index`, `model_enum`, `trajectory_id`, `used_claude`, `used_claude_conservative`, `used_non_gemini_model`) and the `requestId` (`agent/<conversationId>/<timestamp>/<trajectoryId>/<step>`).
+2. **Resolve** — `resolveModelWithTier` from `packages/core/src/transform/model-resolver.ts` maps the user-facing tag (`claude-sonnet-4-6`, `antigravity-gemini-3.7-flash`, etc.) to the Antigravity wire model and the header style.
+3. **Inject** — `buildAgyRequestMetadata` from `packages/core/src/agy-request-metadata.ts:231-293` produces the `labels` block (`last_step_index`, `model_enum`, `trajectory_id`, `used_claude`, `used_claude_conservative`, `used_non_gemini_model`) and the `requestId` (`agent/<conversationId>/<timestamp>/<trajectoryId>/<step>`). Model enums include Gemini 3.7 Flash variants (`gemini-3.7-flash-low` → `MODEL_PLACEHOLDER_M300`, `gemini-3.7-flash-medium` → `MODEL_PLACEHOLDER_M299`, `gemini-3.7-flash-high` → `MODEL_PLACEHOLDER_M298`).
 4. **Stabilize prefix** — `orderAgyRequestPayloadInPlace` (line 190-210) reorders the payload so the field order is `contents → systemInstruction → tools → toolConfig → labels → generationConfig → sessionId`. This is the prefix the prompt cache keys on; a stable prefix is what gives Antigravity its cache hit rate.
 5. **Harden** — `CLAUDE_TOOL_SYSTEM_INSTRUCTION` (`packages/core/src/constants.ts:191-203`) is injected when tools are present to reduce hallucinated parameter names.
 
@@ -594,7 +611,7 @@ gantt
 - `SERVER_ERROR` — 20s.
 - `UNKNOWN` — 60s.
 
-The failure tally is per-account and resets after a 1h TTL (`markRateLimitedWithReason`, `packages/core/src/account-manager.ts:1058-1091`).
+The failure tally is per-account and resets after a 1h TTL (`markRateLimitedWithReason`, `packages/core/src/account-manager.ts:1151-1185`).
 
 ## Sidebar snapshot and RPC protocols
 
@@ -614,7 +631,7 @@ The failure tally is per-account and resets after a 1h TTL (`markRateLimitedWith
 }
 ```
 
-The path is `getSidebarStateFile()` (line 193-198): `ANTIGRAVITY_AUTH_SIDEBAR_STATE_FILE` wins, otherwise `<xdg-state>/cortexkit/antigravity-auth/sidebar-state.json`. The file is mode 0o600 with a 0o700 parent dir.
+The path is `getSidebarStateFile()` (lines 211-216): `ANTIGRAVITY_AUTH_SIDEBAR_STATE_FILE` wins, otherwise `<xdg-state>/cortexkit/antigravity-auth/sidebar-state.json`. The file is mode 0o600 with a 0o700 parent dir.
 
 ### RPC bearer/discovery
 
@@ -622,9 +639,9 @@ The path is `getSidebarStateFile()` (line 193-198): `ANTIGRAVITY_AUTH_SIDEBAR_ST
 
 ### Notification queue
 
-`packages/opencode/src/rpc/notifications.ts:1-62` is a bounded queue (max 100 entries). The host-side push is `pushNotification(payload, sessionId?)` and the TUI-side drain is `drainNotifications(lastReceivedId, sessionId?)`. The 5-second `CONNECTION_TTL_MS` is the signal `isTuiConnected(sessionId?)` uses to suppress commands when the TUI is not running.
+`packages/opencode/src/rpc/notifications.ts:1-59` is a bounded queue (max 100 entries). The host-side push is `pushNotification(payload, sessionId?)` and the TUI-side drain is `drainNotifications(lastReceivedId, sessionId?)`. The 5-second `CONNECTION_TTL_MS` is the signal `isTuiConnected(sessionId?)` uses to suppress commands when the TUI is not running.
 
-The host's `apply` callback (line 233-260 of `plugin/index.ts`) calls `applyCommand(request, { sessionID, settings, onApplied: createSidebarRefresher(...) })` so every `/antigravity-*` mutation bumps the sidebar's `checkedAt` for the next TUI poll.
+The host's `apply` callback (lines 436-470 of `plugin/index.ts`) calls `applyCommand(request, { sessionID, settings, onApplied: createSidebarRefresher(...) })` so every `/antigravity-*` mutation bumps the sidebar's `checkedAt` for the next TUI poll.
 
 ## Lifecycle and disposal
 
@@ -643,7 +660,7 @@ The order is significant and the code documents it (line 99-118):
 6. `drainSidebarWrites()` — wait for every queued sidebar write to land. The file logger + RPC server are still alive so the TUI's last frame can observe a fully landed snapshot.
 7. **Consumers** — dispose every registered consumer in registration order (RPC server, file logger, auto-update checker, etc.).
 
-The default registration order is established by `packages/opencode/src/plugin/index.ts:80-263`; each registered disposable is free to register its own in `dispose()` using either `register(disposable, 'producer')` or the default consumer phase.
+The default registration order is established by `packages/opencode/src/plugin/index.ts:122-480`; each registered disposable is free to register its own in `dispose()` using either `register(disposable, 'producer')` or the default consumer phase.
 
 The server emits a stop on the RPC server that closes `closeAllConnections()` (`packages/opencode/src/rpc/rpc-server.ts:281-292`) and unlinks the port file (line 116-119). The TUI detects the server has gone away when `discoverPortFile` returns `null` and surfaces the "Awaiting Antigravity state" empty state.
 
@@ -661,13 +678,13 @@ Specific recovery paths:
 
 - **Storage corruption** — `loadConfigFile` in `packages/opencode/src/plugin/config/loader.ts:64-95` swallows a bad JSON or schema mismatch and falls back to the default config. The plugin never crashes on a malformed user config.
 - **Auth drift** — `detectAuthStorageDrift` (`packages/opencode/src/plugin/auth-drift.ts`) compares the host's auth against the stored account pool and offers a `restorable` path that re-issues the host's auth from the stored account.
-- **Refresh token revoked** — `AntigravityTokenRefreshError` with `code: 'invalid_grant'` removes the account from the pool and persists the removal with `saveToDiskReplace` (`packages/opencode/src/plugin/fetch-interceptor.ts:875-880`).
-- **Project context failure** — `ensureProjectContext` failures mark the account as cooling down with reason `project-error` (line 947-961).
+- **Refresh token revoked** — `AntigravityTokenRefreshError` with `code: 'invalid_grant'` removes the account from the pool and persists the removal with `saveToDiskReplace` (`packages/opencode/src/plugin/fetch-interceptor.ts:898-915`).
+- **Project context failure** — `ensureProjectContext` failures mark the account as cooling down with reason `project-error` (lines 983-1005).
 - **Capacity exhaustion (529/503)** — the inner-account retry loop probes the next endpoint in the fallback list, capped at `MAX_TOTAL_CAPACITY_RETRIES`. Beyond the cap, the request rotates to the next account.
 - **All accounts over soft-quota** — `getMinWaitTimeForSoftQuota` returns the soonest reset; if the wait exceeds `max_rate_limit_wait_seconds` (default 300s) the interceptor returns a synthetic 200 envelope describing the wait instead of blocking the host.
 - **All accounts rate-limited, no quota fallback** — synthetic 200 with the same pattern as the soft-quota case.
-- **Killswitch trips** — `throwIfAllKilled` raises `AntigravityKillswitchError` (`packages/opencode/src/plugin/errors.ts`), intercepted at `packages/opencode/src/plugin/fetch-interceptor.ts:600-612` and returned as a synthetic error response.
-- **Cross-process lock contention** — `SidebarStateLockContentionError` after 2s of retries (`packages/opencode/src/sidebar-state.ts:122-126, 549-555`); the writer swallows it and the next attempt re-tries the merge.
+- **Killswitch trips** — `throwIfAllKilled` raises `AntigravityKillswitchError` (`packages/opencode/src/plugin/errors.ts`), intercepted at `packages/opencode/src/plugin/fetch-interceptor.ts:618-629` and returned as a synthetic error response.
+- **Cross-process lock contention** — `SidebarStateLockContentionError` after 2s of retries (`packages/opencode/src/sidebar-state.ts:154-164, 855-861`); the writer swallows it and the next attempt re-tries the merge.
 - **Process cancellation** — every long-running call honors `AbortSignal`; `connectTlsWithAbort` (`packages/core/src/agy-transport.ts:626-651`) races the TLS connect against the abort.
 
 The fundamental rule: **the user never sees a silent failure**. Either they see a toast, a synthetic error response, or the next account's attempt. The host's error reporting layer is never directly exposed to auth/quota failures.
@@ -678,7 +695,7 @@ The fundamental rule: **the user never sees a silent failure**. Either they see 
 
 1. **Host → plugin.** The host passes an opaque auth record (`getAuth: () => Promise<AuthDetails | undefined>`). The plugin never sees the host's API key store, only the refresh token it has itself persisted.
 2. **Plugin → Antigravity.** Every request carries `Authorization: Bearer <accessToken>` and the per-account fingerprint `User-Agent`. The token is short-lived; refresh is the proactive queue's job.
-3. **Plugin → TUI.** The TUI receives a **redacted snapshot**. `redactAccountForSidebar` (`packages/opencode/src/sidebar-state.ts:432-477`) zeroes the refresh token, access token, project ID, fingerprint, and every other credential-shaped field. The TUI only sees `id`, `label`, `enabled`, `health`, `current`, `cooldownUntil`, and the redacted `quota` block.
+3. **Plugin → TUI.** The TUI receives a **redacted snapshot**. `redactAccountForSidebar` (`packages/opencode/src/sidebar-state.ts:728-786`) zeroes the refresh token, access token, project ID, fingerprint, and every other credential-shaped field. The TUI only sees `id`, `label`, `enabled`, `health`, `current`, `cooldownUntil`, and the redacted `quota` block.
 4. **TUI → RPC server.** The TUI talks to the server over `127.0.0.1` only (the server refuses to bind elsewhere per `LOOPBACK_HOST = '127.0.0.1'`, `packages/opencode/src/rpc/rpc-server.ts:19`). The bearer token is a 32-byte hex (`randomBytes(32)` line 62) and is regenerated every plugin boot. Discoverability is through a per-pid port file rather than a fixed port, so a wild guess on the port side is needed as well.
 5. **Plugin → file system.** Sensitive files (account storage, signature cache, sidebar state, port file, TUI log) are written mode 0o600 with the parent directory at 0o700. POSIX rename replaces the inode so the new file inherits the staged mode bits. Windows is best-effort — the policy is enforced at the application layer because Windows does not honor POSIX mode bits.
 
@@ -709,7 +726,7 @@ The snapshot is the only place the TUI meets the live pool. The redaction is a s
 | Signature cache | `packages/opencode/src/plugin/cache/signature-cache.ts` (disk) + `initDiskSignatureCache` (memory) | TTL keyed by `(model, sessionId, lastStepIndex)` |
 | AgyRequestSessionStore | `packages/core/src/agy-request-metadata.ts` | 24h TTL or 256 entries, whichever lands first |
 | Managed project context | `packages/core/src/project.ts` | 30-minute TTL keyed by the stable bare refresh token, independent of packed project fields |
-| Sidebar routing map | `packages/opencode/src/sidebar-state.ts:118-120` | 24h max age, max 100 entries |
+| Sidebar routing map | `packages/opencode/src/sidebar-state.ts:136-138` | 24h max age, max 100 entries |
 | Account manager session state | `packages/core/src/account-manager.ts:535-561` | 24h TTL or 256 entries |
 
 ### Randomness
@@ -764,15 +781,15 @@ The root `package.json` exposes the full gate surface:
 {
   "build": "bun run --cwd packages/core build && bun run --cwd packages/opencode build && bun run --cwd packages/pi build",
   "typecheck": "bun run --cwd packages/core build && bun run --cwd packages/opencode typecheck && bun run --cwd packages/pi typecheck && tsc -p tsconfig.scripts.json",
-  "test": "bun run --cwd packages/core build && bun test --isolate",
-  "test:e2e": "bun test --isolate ./packages/e2e-tests/src/plugin-flow.e2e.test.ts ./packages/e2e-tests/src/cli-flow.e2e.test.ts ./packages/e2e-tests/src/rpc-tui-flow.e2e.test.ts",
+  "test": "bun run --cwd packages/core build && bun test --isolate packages/core/src packages/opencode/src packages/pi/src test/",
+  "test:e2e": "bun test --isolate ./packages/e2e-tests/src/plugin-flow.e2e.test.ts ./packages/e2e-tests/src/cli-flow.e2e.test.ts ./packages/e2e-tests/src/rpc-tui-flow.e2e.test.ts ./packages/e2e-tests/src/fetch-guard.test.ts ./packages/e2e-tests/src/mock-antigravity-server.test.ts",
   "format": "biome format --write .",
   "format:check": "biome format .",
-  "lint": "biome lint ."
+  "lint": "biome lint . --error-on-warnings"
 }
 ```
 
-The `format:check` and `lint` paths run Biome 2.5.3 (`package.json:26`) with the config at `biome.json`. The build pipeline emits `dist/` for each package; the opencode build also runs the TUI compiler (`packages/opencode/package.json:64-65`).
+The `format:check` and `lint` paths run Biome 2.5.3 (`package.json:26`) with the config at `biome.jsonc`. The build pipeline emits `dist/` for each package; the opencode build also runs the TUI compiler (`packages/opencode/package.json:64-65`).
 
 ## Extension points and invariants
 
@@ -812,6 +829,7 @@ These invariants are enforced by tests and should not be relaxed:
 7. **Final snapshot writes land before disposal.** `drainSidebarWrites` is the seam; the lifecycle awaits it before tearing down the RPC server and file logger.
 8. **The plugin never reboots a host fetch.** The interceptor captures the host's `fetchImpl` at factory time (`packages/opencode/src/plugin/fetch-interceptor.ts:270-277`) so the plugin's own fetch call never recurses through itself.
 9. **The RPC server binds to loopback only.** `LOOPBACK_HOST = '127.0.0.1'` (`packages/opencode/src/rpc/rpc-server.ts:19`) is the literal — no env override, no relative binding.
-10. **The Pi extension's package-name contract is `pi.extensions`.** `packages/pi/package.json:34-38` is the source-of-truth; the extension's name (`@cortexkit/pi-antigravity-auth`) is what the user's Pi config references.
+10. **Every outbound request must end in a user turn.** After sanitization and recovery, request preparation appends `[Continue]` when the final `contents` role is model or assistant because Antigravity rejects model-ending requests.
+11. **The Pi extension's package-name contract is `pi.extensions`.** `packages/pi/package.json:34-38` is the source-of-truth; the extension's name (`@cortexkit/pi-antigravity-auth`) is what the user's Pi config references.
 
 The architecture is intentionally layered so the next harness (a CLI, a VS Code plugin, a Web extension) can plug in at the `core` boundary or the `opencode` boundary depending on whether it has its own fetch primitive.

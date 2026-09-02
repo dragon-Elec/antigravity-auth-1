@@ -1,6 +1,6 @@
 # Codebase Structure
 
-This document is the file-system map of the `@cortexkit/antigravity-auth*` monorepo at the v2.0 parity refactor. It is written from the **tracked** source tree — every listed file is the actual path shipped on `main` (`c362269`); directories such as `dist/`, `node_modules/`, `packages/opencode/src/tui-compiled/`, and per-agent working roots are tracked as `.gitignore`d but called out where relevant.
+This document is the file-system map of the `@cortexkit/antigravity-auth*` monorepo at the v2.0 parity refactor. It is written from the **tracked** source tree — every listed file is the actual path shipped on `main` (`8efa48b`); directories such as `dist/`, `node_modules/`, `packages/opencode/src/tui-compiled/`, and per-agent working roots are tracked as `.gitignore`d but called out where relevant.
 
 The stack has one business purpose (talk to the Google Antigravity `agy` CLI from non-Google harnesses) and three runtime surfaces (OpenCode server plugin, OpenTUI sidebar, Pi extension). These paragraphs are the only thing you have to read to navigate the tree:
 
@@ -16,7 +16,7 @@ antigravity-auth/
 ├── ARCHITECTURE.md                          # system-of-record architecture doc
 ├── STRUCTURE.md                             # this file — file-system map
 ├── README.md                                # project landing page
-├── biome.json                               # Biome formatter + linter config
+├── biome.jsonc                              # Biome formatter + linter config
 ├── bunfig.toml                              # Bun test preload (test/setup.ts + OpenTUI preload)
 ├── bun.lock                                 # Bun lockfile (committed)
 ├── lefthook.yml                             # pre-commit Biome check
@@ -52,10 +52,10 @@ The `models` blob at the repo root is a tracked JSON snapshot of the upstream An
 
 ## `packages/core` inventory
 
-The harness-agnostic core. Every export under `packages/core/src/index.ts:1-30` is grouped by concern; the test files live next to the production code (`*.test.ts` co-location). The package ships to npm as `@cortexkit/antigravity-auth-core@2.0.0` and is the only dependency `packages/opencode` and `packages/pi` are allowed to take against internal code.
+The harness-agnostic core. Every export under `packages/core/src/index.ts:1-30` is grouped by concern; the test files live next to the production code (`*.test.ts` co-location). The package ships to npm as `@cortexkit/antigravity-auth-core@2.1.0` and is the only dependency `packages/opencode` and `packages/pi` are allowed to take against internal code.
 
 - `packages/core/bunfig.toml` — `preload = ["../../test/setup.ts"]`. Test isolation root.
-- `packages/core/package.json` — declares `main`/`exports` on `./dist/`, lists peer deps (`@openauthjs/openauth`, `xdg-basedir`, `zod`).
+- `packages/core/package.json` — declares `main`/`exports` on `./dist/`, lists runtime dependencies (`xdg-basedir`, `zod`).
 - `packages/core/tsconfig.json` — library tsconfig (extends `@tsconfig/bun`).
 - `packages/core/tsconfig.build.json` — emit + declaration tsconfig used by `bun run build` (`tsc -p tsconfig.build.json`).
 - `packages/core/LICENSE`, `packages/core/README.md` — MIT + repo readme.
@@ -106,7 +106,7 @@ packages/opencode/
 ├── index.ts                                 # barrel: re-exports AntigravityCLIOAuthPlugin + GoogleOAuthPlugin
 ├── assets/antigravity.schema.json           # generated JSON schema for the plugin config (built by script/build-schema.ts)
 ├── bunfig.toml                              # test preload
-├── package.json                             # peerDependencies on @opencode-ai/plugin + @opentui/*
+├── package.json                             # optional peerDependencies on @opencode-ai/plugin, @opentui/*, solid-js, typescript
 ├── tsconfig.json / tsconfig.build.json      # library + build tsconfigs
 ├── docs/                                    # ANTIGRAVITY_API_SPEC, ARCHITECTURE, CONFIGURATION, MODEL-VARIANTS, MULTI-ACCOUNT, TROUBLESHOOTING
 ├── script/                                  # one-off CLI tests + the schema builder (see Root tooling and CI below)
@@ -125,6 +125,7 @@ The `src/tui-compiled/` directory lives under `src/` but is **gitignored** — s
 - `packages/opencode/src/constants.ts` — plugin-level constants: command names (`ANTIGRAVITY_*_COMMAND_NAME`), modal command constants, `MODAL_COMMANDS`.
 - `packages/opencode/src/shims.d.ts` — ambient type shims for host globals.
 - `packages/opencode/src/sidebar-state.ts` — `SidebarStateV1` snapshot schema, `setSidebarMachineState` writer, `mergeMachineState`, `upsertSidebarActiveRouting`, `drainSidebarWrites`, fenced-lock + atomic-write chain. The single source of truth both the server and the TUI read.
+- `packages/opencode/src/tui-preferences.ts` — shared preferences reader/watcher for TUI settings (`tui-preferences.jsonc`, slot ordering, collapse, bar styling).
 - `packages/opencode/src/rpc/` — the loopback HTTP RPC; see **OpenCode TUI and RPC inventory** below.
 
 ### Plugin composition root (`packages/opencode/src/plugin/`)
@@ -137,8 +138,11 @@ The `src/tui-compiled/` directory lives under `src/` but is **gitignored** — s
 - `packages/opencode/src/plugin/auth.ts` — token validation helpers used by the loader (refresh-parts checks, expiry buffer).
 - `packages/opencode/src/plugin/auth-doctor.ts` — self-healing diagnostics for an unrecoverable auth store.
 - `packages/opencode/src/plugin/auth-drift.ts` — `detectAuthStorageDrift`: compares the host's `getAuth()` result against the on-disk pool and surfaces a `restorable` path.
-- `packages/opencode/src/plugin/accounts.ts` — host-side `AccountManager` factory. Stores pool via `plugins/opencode/storage.ts`, exports `getCurrentOrNextForFamily`, `markAccountCoolingDown`, `markRateLimitedWithReason`.
+- `packages/opencode/src/plugin/accounts.ts` — host-side `AccountManager` factory. Stores pool via `packages/opencode/src/plugin/storage.ts`, exports `getCurrentOrNextForFamily`, `markAccountCoolingDown`, `markRateLimitedWithReason`.
 - `packages/opencode/src/plugin/account-access.ts` — CLI-facing account prompts (`promptAccountIndexForVerification`, `promptOpenVerificationUrl`, `createAccountAccessService`).
+- `packages/opencode/src/plugin/account-command-oauth.ts` — `createAccountCommandOAuthService`: manages pending OAuth state sessions for slash-command account additions.
+- `packages/opencode/src/plugin/background-quota-refresh.ts` — `BackgroundQuotaRefresh`: background quota poller for idle accounts with 3-layer cross-process dedup (freshness gate, advisory lock, fail closed) and captured plan tier resolution.
+- `packages/opencode/src/plugin/command-data.ts` — `createCommandDataService`: privacy-safe account data projection (`CommandAccountRow`) and quota refresh service for slash command dialogs. Shipped in compiled TUI tree.
 - `packages/opencode/src/plugin/storage.ts` — host-path adapter: resolves `OPENCODE_CONFIG_DIR`, handles `%APPDATA%` on Windows, syncs the on-disk `.gitignore`. Delegates all data operations to `core/account-storage.ts`.
 - `packages/opencode/src/plugin/persist-account-pool.ts` — lock-held append-and-rewrite of `antigravity-accounts.json` used after a fresh OAuth login.
 - `packages/opencode/src/plugin/fetch-interceptor.ts` — `createFetchInterceptor` — the largest file in the tree. Outer loop picks an account, inner loop walks `ANTIGRAVITY_ENDPOINT_FALLBACKS`, retry/quota/routing pipeline, soft-quota + killswitch gates (killswitch evaluation is model-aware: a `gemini-pro` request checks ONLY the `gemini-pro` quota group via a precomputed `eligibleIndexes` Set that is reused after core selection and after the quota-fallback re-selection), sideline `setSidebarMachineState` writes, `transformAntigravityResponse` reverse-transform.
@@ -221,9 +225,9 @@ The `src/tui-compiled/` directory lives under `src/` but is **gitignored** — s
 
 ### Co-located tests under `packages/opencode/src/`
 
-The plugin directory mirrors the source tree with `*.test.ts` siblings for nearly every file: `account-access`, `account-ineligibility.persistence`, `account-ineligibility`, `accounts`, `agy-transport`, `antigravity-first-fallback`, `auth-doctor`, `auth-drift`, `auth-loader`, `auth`, `cache`, `catalog`, `commands`, `core/streaming/transformer`, `debug`, `errors`, `event-handler`, `fetch-interceptor`, `fetch/retry-state`, `fetch-routing`, `fetch/warmup`, `gemini-dump`, `google-search-tool`, `host-api-compatibility`, `image-saver`, `killswitch`, `lifecycle`, `logger`, `logging-utils`, `model-specific-quota`, `oauth-methods`, `operator-settings`, `persist-account-pool`, `quota-fallback`, `quota`, `recovery`, `reexports`, `refresh-queue`, `request-helpers`, `request`, `rotation`, `search`, `session-context`, `storage`, `stores/signature-store`, `thinking-recovery`, `token`, plus the UI subtree (`ui/ansi`, `ui/auth-menu.actions`, `ui/auth-menu`, `ui/model-status`, `ui/quota-status`), `version`, and the host-SDK pins.
+The plugin directory mirrors the source tree with `*.test.ts` siblings for nearly every file: `account-access`, `account-command-oauth`, `account-ineligibility.persistence`, `account-ineligibility`, `accounts`, `agy-transport`, `antigravity-first-fallback`, `auth-doctor`, `auth-drift`, `auth-loader`, `auth`, `background-quota-refresh`, `behavior-snapshot`, `cache`, `catalog`, `command-data`, `commands`, `core/streaming/transformer`, `debug`, `errors`, `event-handler`, `fetch-interceptor`, `fetch/retry-state`, `fetch-routing`, `fetch/warmup`, `gemini-dump`, `google-search-tool`, `host-api-compatibility`, `image-saver`, `killswitch`, `lifecycle`, `logger`, `logging-utils`, `model-specific-quota`, `oauth-methods`, `operator-settings`, `persist-account-pool`, `quota-fallback`, `quota`, `recovery`, `reexports`, `refresh-queue`, `request-helpers`, `request`, `rotation`, `search`, `session-context`, `storage`, `stores/signature-store`, `thinking-recovery`, `token`, plus the UI subtree (`ui/ansi`, `ui/auth-menu.actions`, `ui/auth-menu`, `ui/model-status`, `ui/quota-status`), `version`, and the host-SDK pins.
 
-Top-level co-located tests under `packages/opencode/src/`: `cli.test.ts`, `constants.test.ts`, `plugin-entry.test.ts`, `sidebar-state.test.ts`, `rpc/notifications.test.ts`, `rpc/port-file.test.ts`, `rpc/rpc-client.test.ts`, `rpc/rpc-server.test.ts`, and the TUI tests `tui/command-dialogs.test.tsx`, `tui/file-logger.test.ts`, `tui.test.tsx`. Run via `bun run --cwd packages/opencode test` (delegates to `bun test --isolate ./src`).
+Top-level co-located tests under `packages/opencode/src/`: `cli.test.ts`, `constants.test.ts`, `package-manifest.test.ts`, `plugin-entry.test.ts`, `sidebar-state.test.ts`, `tui-preferences.test.ts`, `tui-windows-frames.test.tsx`, `rpc/notifications.test.ts`, `rpc/port-file.test.ts`, `rpc/rpc-client.test.ts`, `rpc/rpc-server.test.ts`, and the TUI tests `tui/command-dialogs.test.tsx`, `tui/file-logger.test.ts`, `tui.test.tsx`. Run via `bun run --cwd packages/opencode test` (delegates to `bun test --isolate ./src`).
 
 ## OpenCode TUI and RPC inventory
 
@@ -249,8 +253,8 @@ The TUI is a thin Solid sidebar that polls a redacted snapshot file and a loopba
 - `packages/opencode/src/tui/entry.mjs` — host-aware loader. Probes `opentui:runtime-module:<encodeURIComponent('@opentui/solid')>`; falls back to the raw `tui.tsx` if the host has no runtime module resolver.
 - `packages/opencode/src/tui/command-dialogs.tsx` — `DialogSelect` / `DialogConfirm` / `DialogPrompt` trees mounted from RPC notifications. Every `MODAL_COMMANDS` option has a stable `key` and an explanatory `description`.
 - `packages/opencode/src/tui/file-logger.ts` — write-only file logger under `<xdg-state>/cortexkit/antigravity-auth/tui.log` (mode `0o600`, 1 MB tail-truncated). Parent dir is forced to `0o700` after every write and existing log files are re-`chmod`-ed to `0o600` to repair any leaked permissions. Never writes to stdout/stderr.
-- `packages/opencode/src/tui/ansi.ts` — small ANSI helpers used by the dialog tree.
-- Tests: `tui.test.tsx`, `tui/command-dialogs.test.tsx`, `tui/file-logger.test.ts`.
+- `packages/opencode/src/tui-preferences.ts` — shared preferences reader/watcher for TUI layout and styling settings (`tui-preferences.jsonc`).
+- Tests: `tui.test.tsx`, `tui-preferences.test.ts`, `tui-windows-frames.test.tsx`, `tui/command-dialogs.test.tsx`, `tui/file-logger.test.ts`.
 
 ## `packages/pi` inventory
 
@@ -289,8 +293,8 @@ The TUI is a thin Solid sidebar that polls a redacted snapshot file and a loopba
 - `packages/e2e-tests/src/plugin-flow.e2e.test.ts` — full plugin instance lifecycle against the mock.
 - `packages/e2e-tests/src/rpc-tui-flow.e2e.test.ts` — RPC server boot + notification drain end-to-end.
 - `packages/e2e-tests/src/fetch-guard.test.ts` — pins the loopback-only `globalThis.fetch` guard: loopback URLs pass through, non-loopback URLs throw `LiveNetworkDeniedError`, the guard is restored in `afterEach`.
-- Unit tests under this workspace: `mock-antigravity-server.test.ts`, `process-runner.test.ts`.
-- Run via `bun run test:e2e` at the repo root (delegates to `bun test --isolate ./packages/e2e-tests/src/plugin-flow.e2e.test.ts ./packages/e2e-tests/src/cli-flow.e2e.test.ts ./packages/e2e-tests/src/rpc-tui-flow.e2e.test.ts ./packages/e2e-tests/src/fetch-guard.test.ts`).
+- Unit tests under this workspace: `mock-antigravity-server.test.ts`, `process-runner.test.ts`, `setup.cleanup.test.ts`.
+- Run via `bun run test:e2e` at the repo root (delegates to `bun test --isolate ./packages/e2e-tests/src/plugin-flow.e2e.test.ts ./packages/e2e-tests/src/cli-flow.e2e.test.ts ./packages/e2e-tests/src/rpc-tui-flow.e2e.test.ts ./packages/e2e-tests/src/fetch-guard.test.ts ./packages/e2e-tests/src/mock-antigravity-server.test.ts`).
 
 ## Root tooling and CI
 
@@ -317,7 +321,7 @@ Project-wide tsconfig used by `bun run typecheck` (root script `typecheck`) for 
 ### Root level
 
 - `package.json` — root monorepo (`@cortexkit/antigravity-auth`, `private: true`, `workspaces: [packages/*]`). Exposes `build`, `typecheck`, `test`, `test:e2e`, `test:e2e:models`, `test:e2e:regression`, `dev`, `dev:clean`, `format`, `format:check`, `lint`, `pack:core:dry`, `pack:opencode-dry`, `pack:pi-dry`.
-- `biome.json` — formatter + linter config (`indent: 2 spaces`, `semicolons: asNeeded`, `quoteStyle: single`). Test files (`**/*.test.ts`) and `packages/opencode/src/plugin/ui/select.ts` carry override files that disable a small set of rules where the test naturally needs them.
+- `biome.jsonc` — formatter + linter config (`indent: 2 spaces`, `semicolons: asNeeded`, `quoteStyle: single`). Test files (`**/*.test.ts`) and `packages/opencode/src/plugin/ui/select.ts` carry override files that disable a small set of rules where the test naturally needs them.
 - `bunfig.toml` — root: `preload = ["./test/setup.ts", "@opentui/solid/preload"]`.
 - `lefthook.yml` — pre-commit: `biome check --staged --no-errors-on-unmatched` on `*.{ts,tsx,js,mjs,json,jsonc,yml,yaml}`.
 - `mise.toml` — pins `bun = "1.3"` and `node = "24"`.
@@ -364,7 +368,7 @@ These directories exist at build time but are **gitignored** (see `.gitignore`).
 `packages/opencode/src/tui-compiled/` is the **only** directory in the tree that ships in the npm tarball but is **gitignored** at the source level. It is rebuilt from source every release.
 
 - **Source manifest:** `packages/opencode/scripts/build-tui.ts` — `buildTui({ packageRoot })` walks the relative static import graph rooted at `src/tui.tsx`, transforms each `.tsx` through `@opentui/solid/scripts/solid-transform` (rewriting virtual runtime modules to `opentui:runtime-module:<encoded>`), and copies non-TSX sibling files as-is.
-- **Shipped source allowlist:** `packages/opencode/scripts/build-tui.ts:91-102` (`SHIPPED_SOURCE_FILES`) is the canonical allowlist that ships — `src/tui.tsx`, `src/tui/entry.mjs`, `src/tui/ansi.ts`, `src/tui/command-dialogs.tsx`, `src/tui/file-logger.ts`, `src/sidebar-state.ts`, `src/rpc/rpc-client.ts`, `src/rpc/rpc-dir.ts`, `src/rpc/port-file.ts`, `src/rpc/protocol.ts`.
+- **Shipped source allowlist:** `packages/opencode/scripts/build-tui.ts:91-106` (`SHIPPED_SOURCE_FILES`) is the canonical allowlist that ships — `src/tui.tsx`, `src/tui/entry.mjs`, `src/tui/command-dialogs.tsx`, `src/tui/file-logger.ts`, `src/tui-preferences.ts`, `src/sidebar-state.ts`, `src/rpc/rpc-client.ts`, `src/rpc/rpc-dir.ts`, `src/rpc/port-file.ts`, `src/rpc/protocol.ts`, `src/plugin/command-data.ts`.
 - **Behavior:** the loader `src/tui/entry.mjs` probes `opentui:runtime-module:<encodeURIComponent('@opentui/solid')>`; if that succeeds it loads `../tui-compiled/tui.tsx` (the host has a runtime-module resolver), otherwise it loads the dev fallback `../tui.tsx` via `@opentui/solid/preload`. `src/tui/entry.mjs` is intentionally NOT copied into the compiled tree — it ships via the `src/tui/` directory entry in `package.json` files.
 - **Test:** `packages/opencode/scripts/build-tui.test.ts` pins the SHIPPED_SOURCE_FILES list, the import-graph traversal, the transformed output, and the TUI's import graph against the credential-module allowlist (`account-manager`, `account-storage`, `oauth`, `quota-manager`, `rotation` — the latter via `FORBIDDEN_PATTERNS`).
 - **Pack smoke test:** `packages/opencode/scripts/smoke-tui-pack-install.ts` packs core + opencode via `bun pm pack`, installs them into a real consumer workspace with `bun install --no-save`, then resolves `@cortexkit/opencode-antigravity-auth/.` and `@cortexkit/opencode-antigravity-auth/tui` through the export map and asserts the file shipped by the tarball lines up with the path the loader expects. Run via `bun run --cwd packages/opencode smoke:tui`.
