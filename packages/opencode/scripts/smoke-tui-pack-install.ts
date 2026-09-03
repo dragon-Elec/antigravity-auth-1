@@ -112,9 +112,10 @@ async function run(): Promise<void> {
   }
 
   // 4) Install the opencode tarball into a real consumer. The opencode
-  //    package declares `@cortexkit/antigravity-auth-core@2.0.0` as a
-  //    workspace-only dependency that isn't in the npm registry, so the
-  //    consumer's `package.json` overrides core to the local core tarball.
+  //    package declares core as a workspace dependency, so the consumer
+  //    overrides it with the local core tarball. OpenTUI packages are optional
+  //    host peers: provide them explicitly here to exercise the raw fallback,
+  //    while standalone CLI installs remain free of the TUI compiler stack.
   //    `bun install` follows the export map exactly the way a real host
   //    would — this is the round-trip we actually care about.
   writeFileSync(
@@ -126,6 +127,10 @@ async function run(): Promise<void> {
         type: 'module',
         dependencies: {
           '@cortexkit/opencode-antigravity-auth': opencodeTarball,
+          '@opentui/core': '0.4.5',
+          '@opentui/keymap': '0.4.5',
+          '@opentui/solid': '0.4.5',
+          'solid-js': '1.9.12',
         },
         overrides: {
           '@cortexkit/antigravity-auth-core': coreTarball,

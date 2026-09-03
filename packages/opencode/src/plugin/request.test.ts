@@ -1600,6 +1600,62 @@ describe('request.ts', () => {
       expect(wrapped.request.labels.model_enum).toBe(modelEnum)
     })
 
+    it.each([
+      [
+        'antigravity-gemini-3.8-flash',
+        'gemini-3.8-flash-medium',
+        4000,
+        'MODEL_PLACEHOLDER_M319',
+      ],
+      [
+        'antigravity-gemini-3.8-flash-low',
+        'gemini-3.8-flash-low',
+        1000,
+        'MODEL_PLACEHOLDER_M320',
+      ],
+      [
+        'antigravity-gemini-3.8-flash-medium',
+        'gemini-3.8-flash-medium',
+        4000,
+        'MODEL_PLACEHOLDER_M319',
+      ],
+      [
+        'antigravity-gemini-3.8-flash-high',
+        'gemini-3.8-flash-high',
+        -1,
+        'MODEL_PLACEHOLDER_M318',
+      ],
+    ])('builds the captured AGY 1.1.24 request for %s', (requestedModel, wireModel, thinkingBudget, modelEnum) => {
+      const result = prepareAntigravityRequest(
+        `https://generativelanguage.googleapis.com/v1beta/models/${requestedModel}:generateContent`,
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            contents: [
+              { role: 'user', parts: [{ text: 'Reply with AGY38_OK' }] },
+            ],
+            generationConfig: { maxOutputTokens: 1024 },
+          }),
+        },
+        mockAccessToken,
+        mockProjectId,
+        undefined,
+        'antigravity',
+      )
+
+      const wrapped = JSON.parse(result.init.body as string)
+      expect(result.effectiveModel).toBe(wireModel)
+      expect(wrapped.model).toBe(wireModel)
+      expect(wrapped.request.generationConfig).toMatchObject({
+        maxOutputTokens: 65536,
+        thinkingConfig: { includeThoughts: true, thinkingBudget },
+      })
+      expect(
+        wrapped.request.generationConfig.thinkingConfig,
+      ).not.toHaveProperty('thinkingLevel')
+      expect(wrapped.request.labels.model_enum).toBe(modelEnum)
+    })
+
     it('appends a user continuation when a Gemini AGY request ends with a model turn', () => {
       const result = prepareAntigravityRequest(
         'https://generativelanguage.googleapis.com/v1beta/models/antigravity-gemini-3.6-flash:generateContent',

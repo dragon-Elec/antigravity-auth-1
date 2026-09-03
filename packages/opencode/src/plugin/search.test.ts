@@ -174,7 +174,7 @@ describe('executeSearch', () => {
 
     expect(headers.Authorization).toBe('Bearer bearer-token-xyz')
     expect(headers['User-Agent']).toMatch(
-      /^antigravity\/cli\/1\.1\.13 \(aidev_client; os_type=.+; arch=.+; cl=964361259; auth_method=consumer\)$/,
+      /^antigravity\/cli\/1\.1\.24 \(aidev_client; os_type=.+; arch=.+; cl=974782877; auth_method=consumer\)$/,
     )
     expect(headers['X-Goog-Api-Client']).toBeUndefined()
     expect(headers['Client-Metadata']).toBeUndefined()

@@ -1,4 +1,4 @@
-import { tool } from '@opencode-ai/plugin'
+import { tool } from '@opencode-ai/plugin/tool'
 import { accessTokenExpired, isOAuthAuth, parseRefreshParts } from './auth'
 import { createLogger } from './logger'
 import { executeSearch } from './search'

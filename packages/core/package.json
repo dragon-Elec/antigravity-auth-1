@@ -1,6 +1,6 @@
 {
   "name": "@cortexkit/antigravity-auth-core",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Harness-agnostic core for Google Antigravity OAuth: transport, fingerprint, request transforms, accounts, quota",
   "type": "module",
   "license": "MIT",
@@ -42,7 +42,6 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "@openauthjs/openauth": "^0.4.3",
     "xdg-basedir": "^5.1.0",
     "zod": "^4.0.0"
   },

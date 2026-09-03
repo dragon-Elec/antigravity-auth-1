@@ -23,6 +23,7 @@ describe('OPENCODE_MODEL_DEFINITIONS', () => {
       'antigravity-gemini-3.5-flash',
       'antigravity-gemini-3.6-flash',
       'antigravity-gemini-3.7-flash',
+      'antigravity-gemini-3.8-flash',
       'antigravity-gpt-oss-120b-medium',
     ])
   })
@@ -47,7 +48,18 @@ describe('OPENCODE_MODEL_DEFINITIONS', () => {
       low: { thinkingLevel: 'low' },
       high: { thinkingLevel: 'high' },
     })
+
+    expect(getModel('antigravity-gemini-3.8-flash').variants).toEqual({
+      low: { thinkingLevel: 'low' },
+      high: { thinkingLevel: 'high' },
+    })
   })
+  it('does not expose restricted Gemini 3.8 Flash Cyber', () => {
+    expect(OPENCODE_MODEL_DEFINITIONS).not.toHaveProperty(
+      'antigravity-gemini-3.8-flash-cyber',
+    )
+  })
+
   it('exposes image output and live GPT-OSS capabilities', () => {
     expect(getModel('antigravity-gemini-3.1-flash-image')).toMatchObject({
       reasoning: false,
