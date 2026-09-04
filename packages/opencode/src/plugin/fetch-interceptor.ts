@@ -113,6 +113,16 @@ function createNoAccountResponse(message: string, model: string): Response {
   })
 }
 
+function terminalFetchError(
+  lastError: Error | null,
+  fallbackMessage: string,
+): Error {
+  // A synthetic HTTP 200 is parsed as successful assistant text, bypassing the
+  // host's retry and error pipeline. Preserve the original exception rather
+  // than replacing it with a message-only synthetic response.
+  return lastError ?? new Error(fallbackMessage)
+}
+
 /** Reads `retry-after-ms` / `retry-after` headers, in that order. */
 function retryAfterMsFromResponse(
   response: Response,
@@ -2073,10 +2083,9 @@ export function createFetchInterceptor(
               lastFailure.dumpContext,
             )
           }
-          return createSyntheticErrorResponse(
-            lastError?.message ||
-              `Exceeded max account switches (${maxAccountSwitches}). All accounts rate-limited.`,
-            model ?? 'unknown',
+          throw terminalFetchError(
+            lastError,
+            `Exceeded max account switches (${maxAccountSwitches}). All accounts rate-limited.`,
           )
         }
 
@@ -2098,9 +2107,9 @@ export function createFetchInterceptor(
               lastFailure.dumpContext,
             )
           }
-          return createSyntheticErrorResponse(
-            lastError?.message || 'All Antigravity endpoints failed',
-            model ?? 'unknown',
+          throw terminalFetchError(
+            lastError,
+            'All Antigravity endpoints failed',
           )
         }
 
@@ -2125,10 +2134,7 @@ export function createFetchInterceptor(
         )
       }
 
-      return createSyntheticErrorResponse(
-        lastError?.message || 'All Antigravity accounts failed',
-        model ?? 'unknown',
-      )
+      throw terminalFetchError(lastError, 'All Antigravity accounts failed')
     }
   }
 

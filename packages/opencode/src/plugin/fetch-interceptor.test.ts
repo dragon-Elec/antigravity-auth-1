@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { join } from 'node:path'
 
+import { ANTIGRAVITY_ENDPOINT_DAILY } from '@cortexkit/antigravity-auth-core'
+
 import { AccountManager } from './accounts'
 import { DEFAULT_CONFIG } from './config'
 import type { AgyTransport } from './dependencies'
@@ -14,11 +16,13 @@ const transportMock = mock(
     transportHandler(...args),
 )
 
-let transportHandler = async (
+const unconfiguredTransportHandler = async (
   ..._args: Parameters<typeof fetch>
 ): Promise<Response> => {
   throw new Error('transport handler not configured')
 }
+
+let transportHandler = unconfiguredTransportHandler
 
 const transport: AgyTransport = (url, init) =>
   transportMock(url, init) as unknown as Promise<Response>
@@ -131,6 +135,8 @@ async function makeContext(overrides: ContextOverrides = {}) {
 }
 
 beforeEach(async () => {
+  transportHandler = unconfiguredTransportHandler
+  transportMock.mockClear()
   // Save accounts to disk before each test (loader reads them via loadFromDisk)
   const root = process.env.ANTIGRAVITY_TEST_ROOT
   if (!root) throw new Error('ANTIGRAVITY_TEST_ROOT not set by preload')
@@ -216,7 +222,7 @@ describe('createFetchInterceptor', () => {
     it('normalizes a Request input into a URL+init so the transform pipeline sees headers/body', async () => {
       transportHandler = async (input, init) => {
         expect(typeof input === 'string' ? input : (input as Request).url).toBe(
-          GENERATIVE_URL,
+          `${ANTIGRAVITY_ENDPOINT_DAILY}/v1internal:streamGenerateContent?alt=sse`,
         )
         const headers = new Headers(init?.headers)
         expect(headers.get('authorization')).toBe('Bearer access-a')
@@ -493,6 +499,43 @@ describe('createFetchInterceptor', () => {
       // Exactly one dispatch — straight to the eligible account 1; the
       // killed account 0 was excluded at selection, never attempted.
       expect(seenAuthorizations).toEqual(['Bearer access-b'])
+      interceptor.dispose()
+    })
+  })
+
+  describe('transport failures', () => {
+    it('propagates connection resets instead of emitting them as assistant text', async () => {
+      const resetError = Object.assign(new Error('read ECONNRESET'), {
+        code: 'ECONNRESET',
+        syscall: 'read',
+      })
+      transportHandler = async () => {
+        throw resetError
+      }
+
+      const context = await makeContext({
+        config: {
+          ...DEFAULT_CONFIG,
+          request_jitter_max_ms: 0,
+          switch_account_delay_ms: 0,
+        },
+      })
+      const interceptor = createFetchInterceptor(context)
+
+      await expect(
+        interceptor.fetch(GENERATIVE_URL, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: 'hello' }] }],
+          }),
+        }),
+      ).rejects.toMatchObject({
+        message: 'read ECONNRESET',
+        code: 'ECONNRESET',
+        syscall: 'read',
+      })
+      expect(transportMock).toHaveBeenCalledTimes(2)
       interceptor.dispose()
     })
   })

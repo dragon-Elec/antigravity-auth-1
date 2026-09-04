@@ -1,6 +1,6 @@
 # Codebase Structure
 
-This document is the file-system map of the `@cortexkit/antigravity-auth*` monorepo at the v2.0 parity refactor. It is written from the **tracked** source tree — every listed file is the actual path shipped on `main` (`8efa48b`); directories such as `dist/`, `node_modules/`, `packages/opencode/src/tui-compiled/`, and per-agent working roots are tracked as `.gitignore`d but called out where relevant.
+This document is the file-system map of the `@cortexkit/antigravity-auth*` monorepo at the v2.0 parity refactor. It describes the **tracked** source tree at code revision `397f654` — every listed file is an actual shipped path; directories such as `dist/`, `node_modules/`, `packages/opencode/src/tui-compiled/`, and per-agent working roots are tracked as `.gitignore`d but called out where relevant.
 
 The stack has one business purpose (talk to the Google Antigravity `agy` CLI from non-Google harnesses) and three runtime surfaces (OpenCode server plugin, OpenTUI sidebar, Pi extension). These paragraphs are the only thing you have to read to navigate the tree:
 
@@ -52,7 +52,7 @@ The `models` blob at the repo root is a tracked JSON snapshot of the upstream An
 
 ## `packages/core` inventory
 
-The harness-agnostic core. Every export under `packages/core/src/index.ts:1-30` is grouped by concern; the test files live next to the production code (`*.test.ts` co-location). The package ships to npm as `@cortexkit/antigravity-auth-core@2.1.0` and is the only dependency `packages/opencode` and `packages/pi` are allowed to take against internal code.
+The harness-agnostic core. Every export under `packages/core/src/index.ts:1-30` is grouped by concern; the test files live next to the production code (`*.test.ts` co-location). The package ships to npm as `@cortexkit/antigravity-auth-core` and is the only dependency `packages/opencode` and `packages/pi` are allowed to take against internal code.
 
 - `packages/core/bunfig.toml` — `preload = ["../../test/setup.ts"]`. Test isolation root.
 - `packages/core/package.json` — declares `main`/`exports` on `./dist/`, lists runtime dependencies (`xdg-basedir`, `zod`).
@@ -65,7 +65,7 @@ The harness-agnostic core. Every export under `packages/core/src/index.ts:1-30` 
 - **`packages/core/src/account-manager.ts`** — `AccountManager`: per-account selection, rate-limit state, fingerprint, soft-quota, health score. Hosts call `getCurrentOrNextForFamily`, `markAccountCoolingDown`, `markRateLimitedWithReason`.
 - **`packages/core/src/account-storage.ts`** — durable JSON shape `AccountStorageV4` with `accounts[]`, `activeIndex`, `activeIndexByFamily`; migration v1→v4; lock-held read-modify-write via the fenced file lock.
 - **`packages/core/src/account-types.ts`** — pure types (`ManagedAccount`, `AccountSessionIdentity`, `RateLimitReason`, `CooldownReason`, `AccountStorageV4`).
-- **`packages/core/src/agy-request-metadata.ts`** — `buildAgyRequestMetadata` (the labels block — `last_step_index`, `model_enum`, `trajectory_id`, `used_claude*`, `used_non_gemini_model`) and the per-workspace `AgyRequestSessionStore` registry.
+- **`packages/core/src/agy-request-metadata.ts`** — `buildAgyAgentRequestMetadata` (the labels block — `last_step_index`, `model_enum`, `trajectory_id`, `used_claude*`, `used_non_gemini_model`) and the per-workspace `AgyRequestSessionStore` registry.
 - **`packages/core/src/agy-transport.ts`** — bounded TLS socket pool, chunked + gzip body decode, idle-timeout watchdog. Hosts pass a `connectTlsWithAbort` factory through the dependency seam.
 - **`packages/core/src/antigravity/oauth.ts`** — `authorizeAntigravity`, `exchangeAntigravity`, `refreshAntigravityToken`. Owns PKCE pack/unpack, the `51121` callback URL constant, and the client metadata header.
 - **`packages/core/src/auth.ts`** — `parseRefreshParts`, `formatRefreshParts`, `accessTokenExpired` (60s buffer), refresh-token validity.
@@ -145,7 +145,7 @@ The `src/tui-compiled/` directory lives under `src/` but is **gitignored** — s
 - `packages/opencode/src/plugin/command-data.ts` — `createCommandDataService`: privacy-safe account data projection (`CommandAccountRow`) and quota refresh service for slash command dialogs. Shipped in compiled TUI tree.
 - `packages/opencode/src/plugin/storage.ts` — host-path adapter: resolves `OPENCODE_CONFIG_DIR`, handles `%APPDATA%` on Windows, syncs the on-disk `.gitignore`. Delegates all data operations to `core/account-storage.ts`.
 - `packages/opencode/src/plugin/persist-account-pool.ts` — lock-held append-and-rewrite of `antigravity-accounts.json` used after a fresh OAuth login.
-- `packages/opencode/src/plugin/fetch-interceptor.ts` — `createFetchInterceptor` — the largest file in the tree. Outer loop picks an account, inner loop walks `ANTIGRAVITY_ENDPOINT_FALLBACKS`, retry/quota/routing pipeline, soft-quota + killswitch gates (killswitch evaluation is model-aware: a `gemini-pro` request checks ONLY the `gemini-pro` quota group via a precomputed `eligibleIndexes` Set that is reused after core selection and after the quota-fallback re-selection), sideline `setSidebarMachineState` writes, `transformAntigravityResponse` reverse-transform.
+- `packages/opencode/src/plugin/fetch-interceptor.ts` — `createFetchInterceptor` — the largest file in the tree. Outer loop picks an account, inner loop walks `ANTIGRAVITY_ENDPOINT_FALLBACKS`, retry/quota/routing pipeline, soft-quota + killswitch gates (killswitch evaluation is model-aware: a `gemini-pro` request checks ONLY the `gemini-pro` quota group via a precomputed `eligibleIndexes` Set that is reused after core selection and after the quota-fallback re-selection), sideline `setSidebarMachineState` writes, `transformAntigravityResponse` reverse-transform, and terminal transport error propagation (`terminalFetchError`).
 - `packages/opencode/src/plugin/fetch/retry-state.ts` — per-interceptor `RetryState` (rate-limit toast debounce, retry counts).
 - `packages/opencode/src/plugin/fetch/warmup.ts` — `WarmupState` (probe accounts under load to detect soft-quota cliffs before they surprise the dispatcher).
 - `packages/opencode/src/plugin/fetch-routing.ts` — `resolveHeaderRoutingDecision`, `resolveQuotaFallbackHeaderStyle`, `getCurrentRoutingDecision` (live override from operator settings).
@@ -461,7 +461,7 @@ These are the file clusters where one logical change needs to touch more than on
 | Add a new `@cortexkit/antigravity-auth-core` dependency in `packages/opencode` or `packages/pi` | Bump the published version, then re-run `scripts/version-sync.mjs` so dependents pick up the new pin. |
 | Add a modal command | `constants.ts` (`ANTIGRAVITY_*_COMMAND_NAME`), `plugin/commands.ts` (`MODAL_COMMANDS`, `applyCommand`), `plugin/catalog.ts` (`registerAntigravityCommands`, `applyAntigravityProviderCatalog`), `rpc/protocol.ts` (`CommandModalName`), `tui/command-dialogs.tsx` (dialog payload builder) + the matching `*.test.ts` siblings. The pinning test in `plugin/commands.test.ts` will fail if any one drifts. |
 | Change `SidebarStateV1` schema | `packages/opencode/src/sidebar-state.ts` (schema + writers + merge), `packages/opencode/src/tui.tsx` (render), `packages/opencode/src/tui.test.tsx` (render assertions). The TUI is a polling consumer — version bumps are additive, not breaking. |
-| Change a session-shape contract | `packages/core/src/agy-request-metadata.ts` (storage, `buildAgyRequestMetadata`), `packages/opencode/src/plugin/agy-request-metadata.ts` (host adapter), `packages/opencode/src/plugin/session-context.ts` (registry), every `*.test.ts` that pins trajectory / labels. |
+| Change a session-shape contract | `packages/core/src/agy-request-metadata.ts` (storage, `buildAgyAgentRequestMetadata`), `packages/opencode/src/plugin/agy-request-metadata.ts` (host adapter), `packages/opencode/src/plugin/session-context.ts` (registry), every `*.test.ts` that pins trajectory / labels. |
 | Change an OAuth step | `packages/core/src/antigravity/oauth.ts` (the truth), `packages/opencode/src/antigravity/oauth.ts` (host re-export), `packages/opencode/src/plugin/server.ts` (callback listener), `packages/opencode/src/plugin/oauth-methods.ts` (UI flow), `packages/pi/src/index.ts` (Pi adapter — uses `authorizeAntigravity` + `exchangeAntigravity` directly). |
 | Change the refresh queue cadence | `packages/core/src/auth.ts` (buffer), `packages/core/src/rotation.ts` (backoff), `packages/opencode/src/plugin/refresh-queue.ts` (cadence), the operator settings override in `config/operator-settings-schema.ts`, the dialog in `packages/opencode/src/plugin/commands.ts`. |
 | Bump a published package | `scripts/release.sh` (one command) + `scripts/version-sync.mjs` (writes the new version + cross-package pin). GitHub Actions re-tests, then publishes via OIDC. |

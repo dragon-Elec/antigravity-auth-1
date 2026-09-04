@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## [2.2.1] - 2026-09-04
+
+### Fixed
+
+- Terminal transport failures now propagate through OpenCode's native retry and error pipeline instead of appearing as successful assistant text.
+
+## [2.2.0] - 2026-09-02
+
 ### Added
 
 - Added Gemini 3.8 Flash with low, medium (default), and high thinking tiers using model routes and metadata captured from native AGY CLI 1.1.24.
