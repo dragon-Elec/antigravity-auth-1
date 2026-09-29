@@ -37,11 +37,17 @@ jobs:
       - name: Smoke test TUI
         run: bun run --cwd packages/opencode smoke:tui
 
+      - name: Smoke test packed OpenCode 2 adapter
+        run: bun run smoke:opencode-v2
+
       - name: Run tests
         run: bun run test
 
       - name: Run E2E tests
         run: bun run test:e2e
+
+      - name: Run OpenCode 2 E2E tests in a network-isolated container
+        run: bun run test:e2e:opencode-v2
 
       - name: Check formatting
         run: bun run format:check

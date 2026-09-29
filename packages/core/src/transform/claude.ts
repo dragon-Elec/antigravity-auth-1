@@ -52,7 +52,12 @@ export function isClaudeModel(model: string): boolean {
  */
 export function isClaudeThinkingModel(model: string): boolean {
   const lower = model.toLowerCase()
-  return lower.includes('claude') && lower.includes('thinking')
+  // Native AGY names Sonnet 4.6 without a `-thinking` suffix even though the
+  // route always uses signed thinking with a fixed 1024-token budget.
+  return (
+    lower.includes('claude') &&
+    (lower.includes('thinking') || lower.endsWith('claude-sonnet-4-6'))
+  )
 }
 
 /**

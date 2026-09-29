@@ -39,9 +39,11 @@ antigravity-debug-*.log
 
 # Agent working directories (session state, historian dumps, run continuation)
 .alfonso/
+.cortexkit/
 .hive/
 .omo/
 .opencode/
+.pi/
 .sisyphus/
 
 # Test artifacts

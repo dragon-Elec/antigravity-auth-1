@@ -31,6 +31,8 @@ const AGY_1_1_24_WIRE_FIXTURE = JSON.parse(
   ),
 ) as AgyWireFixture
 
+const PROMPT_SOCKET_CLOSE_TIMEOUT_MS = 500
+
 const savedProxyEnv = {
   HTTPS_PROXY: process.env.HTTPS_PROXY,
   https_proxy: process.env.https_proxy,
@@ -48,6 +50,90 @@ function restoreProxyEnv(): void {
       process.env[key] = value
     }
   }
+}
+
+function disableProxyEnv(): void {
+  delete process.env.HTTPS_PROXY
+  delete process.env.https_proxy
+  delete process.env.ALL_PROXY
+  delete process.env.all_proxy
+  process.env.NO_PROXY = '*'
+  process.env.no_proxy = '*'
+}
+
+function setProxyEnv(port: number): void {
+  process.env.HTTPS_PROXY = `http://127.0.0.1:${port}`
+  delete process.env.https_proxy
+  delete process.env.ALL_PROXY
+  delete process.env.all_proxy
+  delete process.env.NO_PROXY
+  delete process.env.no_proxy
+}
+
+type SocketProbe = {
+  server: net.Server
+  accepted: Promise<net.Socket>
+  peerClosed: Promise<void>
+  getPeer(): net.Socket | undefined
+}
+
+function createSocketProbe(
+  onData: (socket: net.Socket, chunk: Buffer) => void = () => {},
+): SocketProbe {
+  let peer: net.Socket | undefined
+  let acceptPeer: (socket: net.Socket) => void
+  let markPeerClosed: () => void
+  const accepted = new Promise<net.Socket>((resolve) => {
+    acceptPeer = resolve
+  })
+  const peerClosed = new Promise<void>((resolve) => {
+    markPeerClosed = resolve
+  })
+  const server = net.createServer((socket) => {
+    peer = socket
+    socket.on('data', (chunk) => onData(socket, chunk))
+    socket.once('close', () => markPeerClosed())
+    acceptPeer(socket)
+  })
+  return { server, accepted, peerClosed, getPeer: () => peer }
+}
+
+async function listen(server: net.Server, host: string): Promise<number> {
+  await new Promise<void>((resolve) => server.listen(0, host, resolve))
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('no port')
+  return address.port
+}
+
+async function resolvesWithin(
+  promise: Promise<unknown>,
+  timeoutMs: number,
+): Promise<boolean> {
+  return await new Promise<boolean>((resolve) => {
+    let settled = false
+    const timeout = setTimeout(() => {
+      if (settled) return
+      settled = true
+      resolve(false)
+    }, timeoutMs)
+    void promise.then(() => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      resolve(true)
+    })
+  })
+}
+
+async function closeServer(server: net.Server): Promise<void> {
+  await new Promise<void>((resolve, reject) =>
+    server.close((error) => (error ? reject(error) : resolve())),
+  )
+}
+
+async function closeSocketProbe(probe: SocketProbe): Promise<void> {
+  probe.getPeer()?.destroy()
+  await closeServer(probe.server)
 }
 
 async function collect(
@@ -111,22 +197,95 @@ describe('agy transport', () => {
     ).rejects.toThrow(/aborted/i)
   })
 
+  it('destroys a direct TLS connection promptly when aborted', async () => {
+    disableProxyEnv()
+    const probe = createSocketProbe()
+    const port = await listen(probe.server, 'localhost')
+    const controller = new AbortController()
+    const request = fetchWithAgyCliTransport(
+      `https://localhost:${port}/v1internal:streamGenerateContent`,
+      { method: 'POST' },
+      { signal: controller.signal, timeoutMs: 2_000 },
+    )
+
+    try {
+      await probe.accepted
+      controller.abort()
+      await expect(request).rejects.toThrow(/aborted/i)
+      expect(
+        await resolvesWithin(probe.peerClosed, PROMPT_SOCKET_CLOSE_TIMEOUT_MS),
+      ).toBe(true)
+    } finally {
+      await closeSocketProbe(probe)
+    }
+  })
+
+  it('destroys a proxy connection promptly when aborted before CONNECT responds', async () => {
+    const probe = createSocketProbe()
+    const port = await listen(probe.server, '127.0.0.1')
+    setProxyEnv(port)
+    const controller = new AbortController()
+    const request = fetchWithAgyCliTransport(
+      'https://example.com/v1internal:streamGenerateContent',
+      { method: 'POST' },
+      { signal: controller.signal, timeoutMs: 2_000 },
+    )
+
+    try {
+      await probe.accepted
+      controller.abort()
+      await expect(request).rejects.toThrow(/aborted/i)
+      expect(
+        await resolvesWithin(probe.peerClosed, PROMPT_SOCKET_CLOSE_TIMEOUT_MS),
+      ).toBe(true)
+    } finally {
+      await closeSocketProbe(probe)
+    }
+  })
+
+  it('destroys a tunneled TLS connection promptly when aborted during handshake', async () => {
+    let connected = false
+    let markTunnelStarted: () => void
+    const tunnelStarted = new Promise<void>((resolve) => {
+      markTunnelStarted = resolve
+    })
+    const probe = createSocketProbe((socket) => {
+      if (!connected) {
+        connected = true
+        socket.write('HTTP/1.1 200 Connection Established\r\n\r\n')
+        return
+      }
+      markTunnelStarted()
+    })
+    const port = await listen(probe.server, '127.0.0.1')
+    setProxyEnv(port)
+    const controller = new AbortController()
+    const request = fetchWithAgyCliTransport(
+      'https://example.com/v1internal:streamGenerateContent',
+      { method: 'POST' },
+      { signal: controller.signal, timeoutMs: 2_000 },
+    )
+
+    try {
+      expect(await resolvesWithin(tunnelStarted, 500)).toBe(true)
+      controller.abort()
+      await expect(request).rejects.toThrow(/aborted/i)
+      expect(
+        await resolvesWithin(probe.peerClosed, PROMPT_SOCKET_CLOSE_TIMEOUT_MS),
+      ).toBe(true)
+    } finally {
+      await closeSocketProbe(probe)
+    }
+  })
+
   it('times out while waiting for response headers', async () => {
     const server = net.createServer((socket) => {
       socket.on('data', () => {
         // Accept the connection but never respond.
       })
     })
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-    const address = server.address()
-    if (!address || typeof address === 'string') throw new Error('no port')
-
-    process.env.HTTPS_PROXY = `http://127.0.0.1:${address.port}`
-    delete process.env.https_proxy
-    delete process.env.ALL_PROXY
-    delete process.env.all_proxy
-    delete process.env.NO_PROXY
-    delete process.env.no_proxy
+    const port = await listen(server, '127.0.0.1')
+    setProxyEnv(port)
 
     const debugLines: string[] = []
     try {
@@ -156,9 +315,32 @@ describe('agy transport', () => {
         ),
       ).toBe(true)
     } finally {
-      await new Promise<void>((resolve, reject) =>
-        server.close((e) => (e ? reject(e) : resolve())),
+      await closeServer(server)
+    }
+  })
+
+  it('rejects promptly when the peer closes before response headers', async () => {
+    const probe = createSocketProbe((socket) => {
+      socket.end()
+    })
+    const port = await listen(probe.server, '127.0.0.1')
+    setProxyEnv(port)
+    const request = fetchWithAgyCliTransport(
+      'https://example.com/v1internal:streamGenerateContent',
+      { method: 'POST', body: '{}' },
+      { timeoutMs: 750 },
+    ).catch((error: unknown) => error)
+
+    try {
+      expect(await resolvesWithin(request, 250)).toBe(true)
+      const error = await request
+      expect(error).toBeInstanceOf(Error)
+      expect((error as Error).message).toContain(
+        'Socket closed before response headers',
       )
+    } finally {
+      await closeSocketProbe(probe)
+      await request
     }
   })
 

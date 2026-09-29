@@ -52,6 +52,7 @@ describe('isClaudeThinkingModel', () => {
     expect(isClaudeThinkingModel('claude-opus-4-5-thinking')).toBe(true)
     expect(isClaudeThinkingModel('claude-sonnet-4-5-thinking-high')).toBe(true)
     expect(isClaudeThinkingModel('claude-opus-4-5-thinking-low')).toBe(true)
+    expect(isClaudeThinkingModel('claude-sonnet-4-6')).toBe(true)
   })
 
   it('returns true for case-insensitive matches', () => {
@@ -831,7 +832,7 @@ describe('applyClaudeTransforms', () => {
     const payload: RequestPayload = {}
 
     applyClaudeTransforms(payload, {
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-4-5',
       normalizedThinking: { includeThoughts: true, thinkingBudget: 8192 },
       cleanJSONSchema: mockCleanJSONSchema,
     })
@@ -899,7 +900,7 @@ describe('applyClaudeTransforms', () => {
     }
 
     applyClaudeTransforms(payload, {
-      model: 'claude-sonnet-4-6',
+      model: 'claude-sonnet-4-5',
       cleanJSONSchema: mockCleanJSONSchema,
     })
 

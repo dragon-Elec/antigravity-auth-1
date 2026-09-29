@@ -1,12 +1,12 @@
 # Architecture
 
-This document is the system-of-record for the `@cortexkit/antigravity-auth*` stack at the v2.0 parity refactor. It describes the **final** source tree at code revision `397f654` — every cited symbol has a live line reference against the files that actually ship, not the prior single-file plugin that the refactor decomposed into `packages/opencode/src/plugin/index.ts` plus the slim `packages/opencode/index.ts` barrel.
+This document is the system-of-record for the `@cortexkit/antigravity-auth*` stack. It covers the shared core, the OpenCode 1.x server/TUI package, the OpenCode 2.x server adapter, and the Pi extension.
 
 ## System goals and boundaries
 
 The stack solves three problems at the harness boundary:
 
-1. **Let non-Google harnesses talk to Antigravity.** OpenCode and Pi both call `fetch()` against `generativelanguage.googleapis.com`; the Antigravity API only accepts requests shaped like the proprietary `agy` CLI. The plugin intercepts before the host's `fetch` and rebuilds the envelope (`User-Agent`, `Client-Metadata`, request body, SSE response) per credential.
+1. **Let non-Google harnesses talk to Antigravity.** OpenCode and Pi both issue Gemini-shaped requests; the Antigravity API only accepts requests shaped like the proprietary `agy` CLI. OpenCode 1 intercepts the host fetch, OpenCode 2 rewrites the host request to an adapter-owned loopback server, and Pi registers a custom provider. Each adapter rebuilds the AGY envelope and SSE response per credential.
 2. **Manage a pool of Google OAuth accounts.** Each account has a refresh token, an Antigravity `projectId`, an optional `managedProjectId`, a per-account fingerprint, and a quota cache. The runtime rotates, cooldowns, refreshes, and persists them — the host never sees this layer.
 3. **Render a live sidebar without writing to the host's terminal.** The OpenTUI tree is byte-perfect — any stray write corrupts the framebuffer. The plugin publishes a redacted snapshot to a file the TUI polls; slash commands flow over a loopback HTTP RPC with a bearer token the host's TUI process discovers through a port file.
 
@@ -18,13 +18,14 @@ Boundaries that the refactor enforces explicitly:
 
 ## Package and process topology
 
-Three published packages plus a private e2e workspace:
+Four published packages plus a private e2e workspace:
 
 ```
 antigravity-auth/
 ├── packages/
 │   ├── core/                 # @cortexkit/antigravity-auth-core — harness-agnostic
-│   ├── opencode/             # @cortexkit/opencode-antigravity-auth — server + tui
+│   ├── opencode/             # @cortexkit/opencode-antigravity-auth — OpenCode 1 server + tui
+│   ├── opencode-v2/          # @cortexkit/opencode-v2-antigravity-auth — OpenCode 2 server
 │   ├── pi/                   # @cortexkit/pi-antigravity-auth — pi extension
 │   └── e2e-tests/            # private: black-box flows against a mock loopback server
 ├── scripts/                  # build, dev, schema, smoke
@@ -36,13 +37,15 @@ The dependency direction is strictly one-way:
 ```mermaid
 graph LR
   OA[opencode] --> Core[core]
+  OAV2[opencode-v2] --> Core
   PI[pi] --> Core
   OA -. uses .-> SRP[otui sidecar via src/tui/entry.mjs]
   E2E[e2e-tests] --> OA
+  E2E --> OAV2
   E2E --> Core
 ```
 
-`packages/opencode/package.json` exposes two `exports` subpaths that the host installer reads: `exports["."]` (the fetch interceptor / OAuth / quota controller) and `exports["./tui"]` (the OpenTUI sidebar). The host's `opencode plugin` installer writes a server entry to `opencode.json` and a TUI entry to `tui.json`; the host loads the two registrations independently. The Pi package's `pi.extensions` field (`packages/pi/package.json:34-38`) is the analogue. The core package has no peer dependencies on any host runtime; it only depends on Node built-ins, `xdg-basedir`, and `zod`.
+`packages/opencode/package.json` exposes the OpenCode 1 server and TUI subpaths. `packages/opencode-v2/package.json` publishes compiled `dist/plugin.js`, declares `oc-plugin: ['server']`, and exposes the `./server` subpath required by OpenCode 2's real `Host.resolve()` path alongside inert `./tui` and `./rpc` subpaths that satisfy cross-platform resolver probing. The Pi package's `pi.extensions` field is the analogous host entry. Both OpenCode adapters and Pi depend one-way on core.
 
 ### Process topology at runtime
 
@@ -88,7 +91,7 @@ The TUI loads the compiled bundle (`packages/opencode/src/tui/entry.mjs:30-38`) 
 | --- | --- | --- | --- |
 | OAuth | `antigravity/oauth.ts` | core | `authorizeAntigravity`, `exchangeAntigravity`, PKCE pack/unpack |
 | Token state | `auth.ts` | `packages/core/src/auth.ts:1-62` | `parseRefreshParts`, `formatRefreshParts`, expiry buffer |
-| Transport | `agy-transport.ts` | `packages/core/src/agy-transport.ts:1-651` | TLS socket pool, chunked/gzip decode, header/idle timeouts |
+| Transport | `agy-transport.ts` | `packages/core/src/agy-transport.ts:1-628` | TLS socket pool, chunked/gzip decode, header/idle timeouts |
 | Active timeout | `fetch-timeout.ts` | `packages/core/src/fetch-timeout.ts:1-54` | 15s header-only abort for `globalThis.fetch` callers |
 | Quota + planning | `quota-manager.ts` | `packages/core/src/quota-manager.ts:1-1085` | Attributed fetch, exponential backoff, in-flight dedupe |
 | Account pool | `account-manager.ts` | `packages/core/src/account-manager.ts:1-2249` | Selection, rate-limit state, fingerprint, soft-quota |
@@ -205,6 +208,18 @@ The `RetryState` at `packages/opencode/src/plugin/fetch/retry-state.ts` and `War
 ### Dependency seam
 
 `packages/opencode/src/plugin/dependencies.ts:1-212` defines the override surface. Production callers omit it; test/e2e callers pass `fetchImpl`, `agyTransport`, and `filesystemRoots` to redirect all outbound calls onto the mock server. The seam is the only reason the e2e workspace can run without touching the live Antigravity infrastructure (see **End-to-end data flows** below).
+
+## OpenCode 2 server adapter
+
+`packages/opencode-v2/src/plugin.ts` is a separate host adapter for OpenCode 2.x. OpenCode 2's `session.hook('http.request')` contract can rewrite a web-standard `Request`, but it cannot return a custom `Response`. The adapter therefore binds an ephemeral server to `127.0.0.1`, stores the transformed request under an unguessable job UUID, rewrites the host request URL to that loopback job, and lets the host dispatch normally. The loopback handler then runs the shared core account manager, OAuth refresh, project resolution, AGY metadata builder, model resolver, schema sanitizer, and raw AGY transport.
+
+The OpenCode 2 adapter preserves the same wire invariants as OpenCode 1: final requests use `toolConfig.functionCallingConfig.mode: 'VALIDATED'`, remove `providerOptions`, strip image-model tools/thinking, append `[Continue]` after a model-ending history, and preserve complete terminal SSE frames. Unsupported OpenCode title requests are explicitly routed to the supported Gemini 3.5 Flash low tier instead of bypassing the adapter to Google's public endpoint.
+
+The adapter uses the shared v4 `antigravity-accounts.json` pool. `ACCOUNT_INELIGIBLE` and `VALIDATION_REQUIRED` responses persist the corresponding disabled account state before rotation. Generic HTTP 403 responses do not masquerade as rate limits. Stream EOF without a terminal candidate, embedded SSE errors, and exhausted transport fallbacks surface through OpenCode's native error path rather than becoming successful assistant text.
+
+`createOpenCodeV2AntigravityPlugin(overrides)` is the test seam. Production uses core defaults; deterministic tests inject OAuth/project/transport functions while retaining the production loopback and host-hook pipeline. Disposal unregisters host hooks, clears pending jobs and timers, aborts active requests, closes all loopback connections, clears session metadata, and disposes the account manager.
+
+The `oc-plugin` manifest enables only the server entry (`packages/opencode-v2/src/plugin.ts`). OpenCode 2's cross-platform host resolver also probes `./tui` and `./rpc` subpaths even for server-only packages; the package exports inert placeholders (`packages/opencode-v2/src/tui.ts`, `packages/opencode-v2/src/rpc.ts`) to satisfy resolver discovery while leaving UI rendering to OpenCode 2's native provider UI.
 
 ## OpenTUI process and trust boundary
 
@@ -582,7 +597,7 @@ The stack has three distinct timeout systems, **deliberately separated**:
 | AGY response header timeout | **180s** | TLS connect + response headers via raw socket | `packages/core/src/agy-transport.ts:12` |
 | AGY idle timeout | **180s** | Stalled response body — kills the socket if no bytes for 180s | `packages/core/src/agy-transport.ts:16` |
 
-The 15s `ACTIVE_FETCH_TIMEOUT_MS` is stream-safe: it only aborts the request signal until the underlying `fetchImpl` resolves, then removes the timeout listener so the returned body can be streamed past the deadline (`packages/core/src/fetch-timeout.ts:28-54`). The 180s `DEFAULT_AGY_RESPONSE_HEADER_TIMEOUT_MS` covers the Antigravity `agy` CLI's own connect behavior, and the 180s `DEFAULT_AGY_IDLE_TIMEOUT_MS` is a watchdog against a hung body — it resets on every received chunk (line 505-525 in `agy-transport.ts`). The two are independent: a slow but streaming response triggers neither.
+The 15s `ACTIVE_FETCH_TIMEOUT_MS` is stream-safe: it only aborts the request signal until the underlying `fetchImpl` resolves, then removes the timeout listener so the returned body can be streamed past the deadline (`packages/core/src/fetch-timeout.ts:28-54`). The 180s `DEFAULT_AGY_RESPONSE_HEADER_TIMEOUT_MS` covers the Antigravity `agy` CLI's own connect behavior, and the 180s `DEFAULT_AGY_IDLE_TIMEOUT_MS` is a watchdog against a hung body — it resets on every received chunk (lines 518-531 in `agy-transport.ts`). The response-head waiter rejects immediately when a connected peer emits `end` or `close` before sending complete HTTP headers; otherwise each endpoint/account fallback would consume the full 180-second header timeout after the socket was already gone. The two timeout systems are independent: a slow but streaming response triggers neither.
 
 ```mermaid
 gantt
@@ -686,7 +701,7 @@ Specific recovery paths:
 - **All accounts rate-limited, no quota fallback** — synthetic 200 with the same pattern as the soft-quota case.
 - **Killswitch trips** — `throwIfAllKilled` raises `AntigravityKillswitchError` (`packages/opencode/src/plugin/errors.ts`), intercepted at `packages/opencode/src/plugin/fetch-interceptor.ts:612-640` and returned as a synthetic error response.
 - **Cross-process lock contention** — `SidebarStateLockContentionError` after 2s of retries (`packages/opencode/src/sidebar-state.ts:154-164, 855-861`); the writer swallows it and the next attempt re-tries the merge.
-- **Process cancellation** — every long-running call honors `AbortSignal`; `connectTlsWithAbort` (`packages/core/src/agy-transport.ts:626-651`) races the TLS connect against the abort.
+- **Process cancellation** — every long-running call honors `AbortSignal`; the raw transport passes it directly into direct, proxy, and tunneled TLS sockets so cancellation destroys an in-flight connection immediately.
 
 The fundamental rule: **the user never sees a silent failure**. Either they see a toast, a synthetic error response, or the next account's attempt. The host's error reporting layer is never directly exposed to auth/quota failures.
 
@@ -728,7 +743,7 @@ The snapshot is the only place the TUI meets the live pool. The redaction is a s
 | AgyRequestSessionStore | `packages/core/src/agy-request-metadata.ts` | 24h TTL or 256 entries, whichever lands first |
 | Managed project context | `packages/core/src/project.ts` | 30-minute TTL keyed by the stable bare refresh token, independent of packed project fields |
 | Sidebar routing map | `packages/opencode/src/sidebar-state.ts:136-138` | 24h max age, max 100 entries |
-| Account manager session state | `packages/core/src/account-manager.ts:535-561` | 24h TTL or 256 entries |
+| Account manager session state | `packages/core/src/account-manager.ts:567-620` | 24h TTL or 256 entries |
 
 ### Randomness
 
@@ -758,12 +773,13 @@ The two delays that carry jitter (`addJitter`, `randomDelay`) are at `packages/c
 
 ### E2E
 
-`packages/e2e-tests/src/` is a private workspace with four flow tests:
+`packages/e2e-tests/src/` is a private workspace with five flow tests:
 
 - `cli-flow.e2e.test.ts` — exercises the `antigravity-auth` CLI (login, list, quota).
 - `plugin-flow.e2e.test.ts` — drives the full fetch interceptor (quota refresh, generateContent, streaming SSE, `tokenExpiry401`, `rateLimit429`, `capacity503`, `delayedHeaders`).
 - `rpc-tui-flow.e2e.test.ts` — drives the TUI ↔ RPC bridge.
 - `fetch-guard.test.ts` — pins the loopback-only `globalThis.fetch` guard installed by the preload so a stray non-loopback URL throws `LiveNetworkDeniedError` instead of leaking to the live network.
+- `opencode-v2-flow.e2e.test.ts` — launches the pinned real OpenCode 2 host against the compiled adapter and loopback AGY mock. It verifies host loading, model/title routing, AGY envelope invariants, image permissions, ineligible-account persistence/rotation, endpoint exhaustion, embedded SSE failures, and clean EOF handling.
 
 The harness (`packages/e2e-tests/src/harness.ts:1-314`) is the spine:
 
@@ -771,8 +787,9 @@ The harness (`packages/e2e-tests/src/harness.ts:1-314`) is the spine:
 - `createE2eHarness` (line 59-163) starts a mock server on `127.0.0.1:0` (`packages/e2e-tests/src/mock-antigravity-server.ts:209-273`), installs a fetch router that rewrites every outbound URL to the mock, and writes a `quick_mode` config file disabling background quota refresh + auto-update.
 - **No live network.** The preload wraps `globalThis.fetch` with a `LOOPBACK_HOSTS = { '127.0.0.1', '::1', '[::1]', 'localhost' }` allowlist (line 43); any other hostname throws `LiveNetworkDeniedError` (line 34-41). The remaining loopback rewrite is enforced by `dependencies.agyTransport` and `dependencies.fetchImpl` overrides plus the `REWRITE_HOSTS` allow-list in `packages/e2e-tests/src/harness.ts:221-230`. A regression that re-introduces a live URL is caught by the fetch guard's deny record.
 - `afterEach` and `afterAll` (`packages/e2e-tests/src/setup.ts:120-153`) restore the original fetch and reap the per-test temp root.
+- The OpenCode 2 harness sets `OPENCODE_DB` to a path inside the test's temporary root before spawning the host and asserts that the database was created there. HOME/XDG isolation alone is never treated as sufficient. The host's direct provider base URL and every adapter transport call point at the loopback recorder.
 
-The e2e `bun test` runs from the root via `bun run test:e2e` (`package.json:12`).
+The OpenCode 1/Pi e2e suite runs via `bun run test:e2e`; `bun run test:e2e:opencode-v2` runs the real-host OpenCode 2 suite in Docker with networking disabled, so the host can reach only the in-container loopback mock. The explicitly named `test:e2e:opencode-v2:local` debugging command still provisions and asserts a per-run `OPENCODE_DB`; it is not a CI gate.
 
 ### Release gates
 
@@ -780,10 +797,13 @@ The root `package.json` exposes the full gate surface:
 
 ```jsonc
 {
-  "build": "bun run --cwd packages/core build && bun run --cwd packages/opencode build && bun run --cwd packages/pi build",
-  "typecheck": "bun run --cwd packages/core build && bun run --cwd packages/opencode typecheck && bun run --cwd packages/pi typecheck && tsc -p tsconfig.scripts.json",
-  "test": "bun run --cwd packages/core build && bun test --isolate packages/core/src packages/opencode/src packages/pi/src test/",
+  "build": "bun run --cwd packages/core build && bun run --cwd packages/opencode build && bun run --cwd packages/opencode-v2 build && bun run --cwd packages/pi build",
+  "typecheck": "bun run --cwd packages/core build && bun run --cwd packages/opencode typecheck && bun run --cwd packages/opencode-v2 typecheck && bun run --cwd packages/pi typecheck && tsc -p tsconfig.scripts.json",
+  "test": "bun run --cwd packages/core build && bun run --cwd packages/opencode-v2 build && bun test --isolate packages/core/src packages/opencode/src packages/pi/src test/ packages/opencode-v2/test/",
   "test:e2e": "bun test --isolate ./packages/e2e-tests/src/plugin-flow.e2e.test.ts ./packages/e2e-tests/src/cli-flow.e2e.test.ts ./packages/e2e-tests/src/rpc-tui-flow.e2e.test.ts ./packages/e2e-tests/src/fetch-guard.test.ts ./packages/e2e-tests/src/mock-antigravity-server.test.ts",
+  "test:e2e:opencode-v2": "bash packages/e2e-tests/docker/run-opencode-v2-test.sh",
+  "test:e2e:opencode-v2:local": "bun run --cwd packages/core build && bun run --cwd packages/opencode-v2 build && bun test --isolate ./packages/e2e-tests/src/opencode-v2-flow.e2e.test.ts",
+  "smoke:opencode-v2": "bun run --cwd packages/opencode-v2 smoke:pack",
   "format": "biome format --write .",
   "format:check": "biome format .",
   "lint": "biome lint . --error-on-warnings"
@@ -815,7 +835,7 @@ The TUI's notification poll will surface the new command from the next push onwa
 
 ### Adding a new host
 
-The `PluginDependencyOverrides` seam (`packages/opencode/src/plugin/dependencies.ts:1-204`) is the integration point. A new host instantiates `createAntigravityPlugin(providerId, { dependencies: { ... } })` and ships a `PluginResult`. The harnesses for the e2e workspace (`packages/e2e-tests/src/harness.ts`) are the blueprint for the production-grade test rig.
+Use core directly when a host owns its provider/transport lifecycle. OpenCode 1 composes through `PluginDependencyOverrides`; OpenCode 2 composes through `createOpenCodeV2AntigravityPlugin(overrides)` and a loopback request rewrite because its request hook cannot return a response. The corresponding e2e harnesses are the production-grade blueprints.
 
 ### Hard invariants
 
@@ -832,5 +852,7 @@ These invariants are enforced by tests and should not be relaxed:
 9. **The RPC server binds to loopback only.** `LOOPBACK_HOST = '127.0.0.1'` (`packages/opencode/src/rpc/rpc-server.ts:19`) is the literal — no env override, no relative binding.
 10. **Every outbound request must end in a user turn.** After sanitization and recovery, request preparation appends `[Continue]` when the final `contents` role is model or assistant because Antigravity rejects model-ending requests.
 11. **The Pi extension's package-name contract is `pi.extensions`.** `packages/pi/package.json:34-38` is the source-of-truth; the extension's name (`@cortexkit/pi-antigravity-auth`) is what the user's Pi config references.
+12. **OpenCode 2 host tests always set an isolated `OPENCODE_DB`.** No OpenCode 2 process may run against the developer's default database during tests.
+13. **The OpenCode 2 package must resolve after packing.** `packages/opencode-v2/scripts/smoke-pack-install.ts` installs the tarballs into a clean consumer and verifies the real `Host.resolve()` server entry alongside inert TUI and RPC compatibility exports; direct source imports are not sufficient release evidence.
 
 The architecture is intentionally layered so the next harness (a CLI, a VS Code plugin, a Web extension) can plug in at the `core` boundary or the `opencode` boundary depending on whether it has its own fetch primitive.

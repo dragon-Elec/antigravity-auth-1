@@ -4,7 +4,7 @@ Guidance for AI agents working with this repository.
 
 ## Overview
 
-OpenCode plugin for Google Antigravity OAuth. Intercepts `fetch()` calls to `generativelanguage.googleapis.com`, transforms them to Antigravity format, and handles auth, quota, recovery, and multi-account rotation.
+Google Antigravity OAuth adapters for OpenCode 1, OpenCode 2, and Pi. OpenCode 1 intercepts host fetches; OpenCode 2 rewrites provider requests to an adapter-owned loopback bridge; Pi registers a custom provider. Shared auth, transport, storage, quota, and rotation logic lives in core.
 
 ## Build & Test Commands
 
@@ -16,10 +16,13 @@ bun run test                         # Run all unit tests (bun test --isolate ac
 bun test --isolate src/plugin/auth.test.ts            # Single test file
 bun test --isolate -t "test name here"                # Single test by name (uses bun:test's -t filter)
 bun test --isolate --watch src/plugin/auth.test.ts   # Watch mode, single file
-bun run test:e2e                     # Deterministic e2e flows (mock Antigravity server, no network)
+bun run test:e2e                     # Deterministic OpenCode 1/Pi e2e flows
+bun run test:e2e:opencode-v2         # Default/CI: real host in Docker with network disabled
+bun run test:e2e:opencode-v2:local   # Explicit local debug run; isolated OPENCODE_DB is mandatory
 bun run test:e2e:models              # Live Antigravity model inventory (CI-gated, network)
 bun run test:e2e:regression          # Cross-model + Gemini CLI regression (network)
 bun run --cwd packages/opencode smoke:tui            # Pack-and-install smoke test for the TUI subpath
+bun run smoke:opencode-v2            # Pack/install OpenCode 2 and resolve through Host.resolve()
 ```
 
 Format and lint via Biome:
@@ -49,7 +52,7 @@ Pre-commit hooks (`.lefthook.yml`) run Biome on changed `*.{ts,tsx,js,mjs,json,j
 - Order: node builtins > external packages > local modules
 
 ### Exports
-- Named exports only in src/ — no default exports
+- Named exports only in src/, except host contracts that require a default export (Pi and OpenCode 2 server entries)
 - Barrel files (index.ts) for module surfaces
 
 ### Naming
@@ -89,10 +92,7 @@ Pre-commit hooks (`.lefthook.yml`) run Biome on changed `*.{ts,tsx,js,mjs,json,j
 
 ## Module Structure
 
-The repository is a Bun workspace with three packages. The pre-monorepo
-single-root-`src/` layout was retired when the project split into
-`packages/{core,opencode,pi}` so the harness-agnostic engine, the host
-adapter, and the Pi host can ship on independent cadences.
+The repository is a Bun workspace with four published packages. The harness-agnostic engine and the OpenCode 1, OpenCode 2, and Pi adapters ship independently.
 
 ```
 packages/
@@ -112,7 +112,7 @@ packages/
 │       ├── quota-manager.ts     # Quota caching + fallbacks
 │       ├── rotation.ts          # Account rotation state
 │       └── transform/           # Claude / Gemini / cross-model sanitizer + tests
-├── opencode/                # OpenCode host adapter — plugin entry, fetch interceptor, TUI
+├── opencode/                # OpenCode 1 host adapter — plugin entry, fetch interceptor, TUI
 │   └── src/
 │       ├── cli.ts               # `antigravity-auth` CLI (login / list / quota)
 │       ├── plugin/              # Plugin factory, OAuth methods, account access, fetch
@@ -125,6 +125,10 @@ packages/
 │       ├── tui/                 # Precompiled + raw TUI sources
 │       ├── rpc/                 # Loopback RPC server + client (sidebar notifications)
 │       └── hooks/               # Lifecycle hooks (auto-update checker, etc.)
+├── opencode-v2/             # OpenCode 2 Promise-plugin adapter
+│   ├── src/plugin.ts            # Request hook + loopback bridge + OAuth integration
+│   ├── test/                    # Contract and final-wire tests
+│   └── scripts/                 # Packed-consumer Host.resolve smoke test
 └── pi/                      # Pi host adapter — thinner facade around core
     └── src/
         ├── index.ts             # Public barrel — `streamCortexKitAntigravity` + OAuth helpers
@@ -137,7 +141,7 @@ packages/
 ## Key Design Patterns
 
 ### 1. Request Interception
-Plugin intercepts `fetch()` for `generativelanguage.googleapis.com`, transforms to Antigravity format. Two header styles: `antigravity` (Electron-style UA + fingerprint) and `gemini-cli` (nodejs-client UA).
+OpenCode 1 intercepts `fetch()` for `generativelanguage.googleapis.com`. OpenCode 2 cannot return a custom response from `session.hook('http.request')`, so it rewrites matching requests to an ephemeral `127.0.0.1` bridge and lets the host dispatch normally. The bridge then calls the shared AGY transport. Never run an OpenCode 2 test or probe unless `OPENCODE_DB` points to an isolated temporary database.
 
 ### 2. Claude Thinking Blocks
 ALL thinking blocks are stripped from outgoing requests for Claude models. Claude generates fresh thinking each turn. This eliminates signature validation errors.

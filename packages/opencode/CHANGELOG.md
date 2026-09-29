@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## [2.3.0] - 2026-09-17
+
+### Added
+
+- Added the separately installable `@cortexkit/opencode-v2-antigravity-auth` adapter for OpenCode 2.x, backed by the shared account pool and Antigravity transport.
+
+### Fixed
+
+- Request cancellation now destroys in-flight direct and HTTPS-proxy connections immediately instead of leaving sockets alive until the transport timeout.
+- Raw AGY connections that close before sending HTTP response headers now fail immediately instead of consuming the full 180-second header timeout for every endpoint and account fallback.
+
 ## [2.2.1] - 2026-09-04
 
 ### Fixed
