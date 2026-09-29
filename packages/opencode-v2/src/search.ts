@@ -175,7 +175,9 @@ export function insertCitationMarkers(
   return decoder.decode(bytes)
 }
 
-const REDIRECT_RESOLVE_TIMEOUT_MS = 2000
+// Grounding redirects can take 3-5s to resolve (observed); 2s aborted real
+// resolutions and silently degraded sources back to redirect URLs.
+const REDIRECT_RESOLVE_TIMEOUT_MS = 8000
 
 /**
  * Resolve a grounding redirect URI (vertexaisearch.cloud.google.com/...)
