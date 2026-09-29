@@ -60,6 +60,7 @@ import type {
 import type { Registration } from '@opencode-ai/plugin/promise/registration'
 import type { SessionRequestKind } from '@opencode-ai/plugin/promise/session'
 
+import { antigravityModelInfos } from './catalog.ts'
 import { waitForAntigravityCode } from './oauth-callback.ts'
 import { executeSearch, formatSearchOutput, SearchHttpError } from './search.ts'
 
@@ -243,17 +244,9 @@ function log(...args: unknown[]): void {
   }
 }
 
-const MODEL_IDS = new Set([
-  'gemini-3.8-flash',
-  'gemini-3.7-flash',
-  'gemini-3.6-flash',
-  'gemini-3.5-flash',
-  'gemini-3.1-pro',
-  'gemini-3.1-flash-image',
-  'claude-sonnet-4-6-thinking',
-  'claude-opus-4-6-thinking',
-  'gpt-oss-120b-medium',
-])
+// The Antigravity provider owns a dedicated provider ID; every request under it
+// belongs to this adapter, so no per-model allowlist is needed.
+const PROVIDER_ID = 'antigravity'
 
 function familyFor(modelID: string): 'claude' | 'gemini' {
   return getModelFamily(modelID) === 'claude' ? 'claude' : 'gemini'
@@ -638,6 +631,46 @@ export function createOpenCodeV2AntigravityPlugin(
         storagePath: ACCOUNTS_FILE,
       })
       log('setup-start', 'accounts', manager.getTotalAccountCount())
+
+      // Publish the Antigravity provider and its model catalog. The dedicated
+      // provider ID keeps this adapter's traffic separate from the native
+      // API-key Google provider: every request under it is ours, no allowlist
+      // needed. The google runtime package stays the wire codec.
+      registrations.push(
+        await (
+          ctx as unknown as {
+            provider: {
+              transform: (
+                cb: (editor: {
+                  add: (input: {
+                    info: Record<string, unknown>
+                    models: Array<Record<string, unknown>>
+                  }) => void
+                }) => void,
+              ) => Promise<Registration>
+            }
+          }
+        ).provider.transform((editor) => {
+          editor.add({
+            info: {
+              id: PROVIDER_ID,
+              name: 'Google Antigravity',
+              // Reuse the google integration so the OAuth method
+              // ("Google Antigravity (add account)") gates availability.
+              integrationID: 'google',
+              package: '@opencode-ai/ai/providers/google',
+              activation: 'enabled',
+            },
+            models: antigravityModelInfos(),
+          })
+          log(
+            'provider-registered',
+            PROVIDER_ID,
+            'models',
+            antigravityModelInfos().length,
+          )
+        }),
+      )
 
       const reloadPool = async (
         options: { flushCurrent?: boolean } = {},
@@ -1214,8 +1247,8 @@ export function createOpenCodeV2AntigravityPlugin(
       registrations.push(
         await ctx.session.hook('http.request', async (event) => {
           try {
-            if (event.model.providerID !== 'google') return
-            if (event.kind !== 'title' && !MODEL_IDS.has(event.model.id)) return
+            if (event.model.providerID !== PROVIDER_ID) return
+            if (event.kind !== 'title') return
             const url = new URL(event.request.url)
             if (
               !/\/models\/[^:]+:(?:streamGenerateContent|generateContent)/.test(

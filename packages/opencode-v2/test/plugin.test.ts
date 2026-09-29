@@ -79,6 +79,66 @@ describe('opencode-v2-antigravity-auth plugin entry', () => {
     expect(result.activeIndexByFamily).toEqual({ claude: 0, gemini: 0 })
   })
 
+  test('registers the antigravity provider with the full core catalog', async () => {
+    type ProviderAddInput = {
+      info: Record<string, unknown>
+      models: Array<Record<string, unknown>>
+    }
+    let added: ProviderAddInput | undefined
+    const adapter = createOpenCodeV2AntigravityPlugin()
+    const registration = { dispose: async () => {} }
+    const cleanup = await adapter.setup({
+      session: {
+        hook: async () => registration,
+      },
+      tool: {
+        transform: async () => registration,
+      },
+      provider: {
+        transform: async (
+          transform: (editor: {
+            add: (input: ProviderAddInput) => void
+          }) => void,
+        ) => {
+          transform({
+            add: (input) => {
+              added = input
+            },
+          })
+          return registration
+        },
+      },
+      integration: {
+        transform: async () => registration,
+      },
+    } as never)
+
+    try {
+      expect(added).toBeDefined()
+      expect(added!.info).toMatchObject({
+        id: 'antigravity',
+        name: 'Google Antigravity',
+        integrationID: 'google',
+        package: '@opencode-ai/ai/providers/google',
+        activation: 'enabled',
+      })
+      const modelIDs = added!.models.map((m) => m.id)
+      expect(modelIDs).toContain('antigravity-gemini-3.8-flash')
+      expect(modelIDs).toContain('antigravity-claude-sonnet-4-6-thinking')
+      expect(modelIDs).toContain('antigravity-gpt-oss-120b-medium')
+      const flash = added!.models.find(
+        (m) => m.id === 'antigravity-gemini-3.8-flash',
+      )
+      expect(flash).toMatchObject({
+        modelID: 'antigravity-gemini-3.8-flash',
+        limit: { context: 1048576, output: 65536 },
+        name: 'Gemini 3.8 Flash (Antigravity)',
+      })
+    } finally {
+      if (cleanup) await cleanup()
+    }
+  })
+
   test('rejects OAuth completion when account persistence fails', async () => {
     type OAuthMethodDefinition = {
       authorize: () => Promise<{ callback: Promise<unknown> }>
@@ -111,6 +171,9 @@ describe('opencode-v2-antigravity-auth plugin entry', () => {
         hook: async () => registration,
       },
       tool: {
+        transform: async () => registration,
+      },
+      provider: {
         transform: async () => registration,
       },
       integration: {
@@ -200,6 +263,9 @@ describe('opencode-v2-antigravity-auth plugin entry', () => {
       tool: {
         transform: async () => registration,
       },
+      provider: {
+        transform: async () => registration,
+      },
       integration: {
         transform: async () => registration,
       },
@@ -210,7 +276,7 @@ describe('opencode-v2-antigravity-auth plugin entry', () => {
         sessionID: 'title-session',
         agent: 'title-agent',
         model: {
-          providerID: 'google',
+          providerID: 'antigravity',
           id: 'gemini-3.5-flash-lite',
         },
         kind: 'title',
