@@ -47,6 +47,7 @@ import {
   parseRefreshParts,
   refreshAntigravityToken,
   resolveModelForHeaderStyle,
+  SEARCH_MODEL,
   SKIP_THOUGHT_SIGNATURE,
   sanitizeCrossModelPayloadInPlace,
   toGeminiSchema,
@@ -60,6 +61,7 @@ import type { Registration } from '@opencode-ai/plugin/promise/registration'
 import type { SessionRequestKind } from '@opencode-ai/plugin/promise/session'
 
 import { waitForAntigravityCode } from './oauth-callback.ts'
+import { executeSearch, formatSearchOutput, SearchHttpError } from './search.ts'
 
 type ResolvedModel = ReturnType<typeof resolveModelForHeaderStyle>
 interface GeminiPart {
@@ -1374,6 +1376,100 @@ export function createOpenCodeV2AntigravityPlugin(
               return nextCredential
             },
             label: () => 'Antigravity account',
+          })
+        }),
+      )
+
+      // Grounded Google Search tool: a separate API call with ONLY the
+      // grounding tools enabled (they cannot be combined with function
+      // declarations). Thinking is always on — flash-class search models
+      // produce substantially worse answers without it.
+      registrations.push(
+        await ctx.tool.transform((editor) => {
+          editor.add({
+            name: 'google_search',
+            description:
+              "Runs a web search powered by Google Search (Gemini grounding) and returns a synthesized answer with inline [n] citations, followed by a source list of resolved canonical URLs. Unlike a link-list search, the answer text is already composed from the search results — read the answer and cite it directly. Use for current events, recent developments, version releases, or anything that may have changed after your knowledge cutoff. If the user's query mentions specific URLs, pass them in 'urls' so their page contents are fetched and incorporated into the same grounded answer.",
+            input: {
+              type: 'object',
+              properties: {
+                query: {
+                  type: 'string',
+                  description:
+                    'The search query or question to answer using web search',
+                },
+                urls: {
+                  type: 'array',
+                  items: { type: 'string' },
+                  description:
+                    'Page URLs to fetch and incorporate into the grounded answer. Always include every URL the user mentioned in their query.',
+                },
+              },
+              required: ['query'],
+              additionalProperties: false,
+            },
+            execute: async (rawInput, context) => {
+              const input = rawInput as { query?: string; urls?: string[] }
+              const query = (input.query ?? '').trim()
+              if (!query) {
+                return { content: 'Error: query parameter is required.' }
+              }
+              const accounts = manager.getEnabledAccounts()
+              if (accounts.length === 0) {
+                return {
+                  content:
+                    'Error: Not authenticated with Antigravity. Add an account with `opencode auth login` first.',
+                }
+              }
+              try {
+                const account = manager.getCurrentOrNextForFamily(
+                  'gemini',
+                  SEARCH_MODEL,
+                  'hybrid',
+                  'antigravity',
+                  false,
+                  100,
+                  10 * 60_000,
+                  { id: context.sessionID ?? 'search', parentId: null },
+                )
+                if (!account) {
+                  return {
+                    content:
+                      'Error: No eligible Antigravity account available for search right now.',
+                  }
+                }
+                const auth = await accessFor(account)
+                const accessToken = auth.access
+                if (!accessToken) {
+                  return {
+                    content:
+                      'Error: Antigravity account has no access token. Re-authenticate with `opencode auth login`.',
+                  }
+                }
+                const parts = parseRefreshParts(auth.refresh)
+                const projectId =
+                  parts.managedProjectId || parts.projectId || 'unknown'
+                const result = await executeSearch(
+                  { query, urls: input.urls },
+                  accessToken,
+                  projectId,
+                )
+                manager.markRequestSuccess(account)
+                manager.markAccountUsed(account.index)
+                manager.recordRequest(account.index, 'gemini')
+                manager.requestSaveToDisk()
+                return { content: formatSearchOutput(result) }
+              } catch (error) {
+                if (error instanceof SearchHttpError) {
+                  return {
+                    content: `## Search Error\n\nFailed to execute search: ${error.status} ${error.statusText}\n\n${error.body}\n\nPlease try again with a different query.`,
+                  }
+                }
+                return {
+                  content: `## Search Error\n\nFailed to execute search: ${errorMessage(error)}. Please try again with a different query.`,
+                }
+              }
+            },
           })
         }),
       )

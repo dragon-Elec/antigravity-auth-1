@@ -110,6 +110,9 @@ describe('opencode-v2-antigravity-auth plugin entry', () => {
       session: {
         hook: async () => registration,
       },
+      tool: {
+        transform: async () => registration,
+      },
       integration: {
         transform: async (transform: unknown) => {
           ;(
@@ -193,6 +196,9 @@ describe('opencode-v2-antigravity-auth plugin entry', () => {
           }
           return registration
         },
+      },
+      tool: {
+        transform: async () => registration,
       },
       integration: {
         transform: async () => registration,
